@@ -28,8 +28,27 @@ const SB_KEY = process.env.SUPABASE_SERVICE_KEY || '';
 const DRY_RUN = String(process.env.DRY_RUN || 'false').toLowerCase() === 'true';
 const FULL_SYNC = String(process.env.FULL_SYNC || 'false').toLowerCase() === 'true';
 
+// Bornes glissantes pour éviter de recharger tout l'historique à chaque run (coût API +
+// risque de timeout/quota) : les tickets n'ont besoin que d'une fenêtre récente pour la
+// priorisation, la vue produit ne regarde que 90 jours. Les commandes ont une fenêtre plus
+// large car un ticket récent peut référencer une commande plus ancienne (délais SAV).
+const TICKET_LOOKBACK_DAYS = parseInt(process.env.TICKET_LOOKBACK_DAYS || '14', 10);
+const SALES_ORDER_LOOKBACK_DAYS = parseInt(process.env.SALES_ORDER_LOOKBACK_DAYS || '90', 10);
+
 if (!EDESK_TOKEN) { console.error('❌ EDESK_API_TOKEN requis.'); process.exit(1); }
 if (!SB_URL || !SB_KEY) { console.error('❌ SUPABASE_URL / SUPABASE_SERVICE_KEY requis.'); process.exit(1); }
+
+function daysAgoIso(days) {
+  return new Date(Date.now() - days * 86_400_000).toISOString();
+}
+
+// Plus récent entre le curseur incrémental et la fenêtre glissante — ne jamais remonter
+// plus loin que la fenêtre, même sur le tout premier run (FULL_SYNC ou pas de curseur).
+function effectiveSince(cursor, lookbackDays) {
+  const floor = daysAgoIso(lookbackDays);
+  if (!cursor) return floor;
+  return cursor > floor ? cursor : floor;
+}
 
 // ── HTTP helpers ─────────────────────────────────────────────────────
 
@@ -285,8 +304,9 @@ async function syncReferenceData() {
 
 async function syncSalesOrders() {
   const cursor = await getSyncCursor('sales_orders');
-  console.log(`▶ Sales orders (depuis ${cursor || 'toujours'})...`);
-  const params = cursor ? { filter_created_at_gte: Math.floor(new Date(cursor).getTime() / 1000) } : {};
+  const since = effectiveSince(cursor, SALES_ORDER_LOOKBACK_DAYS);
+  console.log(`▶ Sales orders (depuis ${since}, fenêtre max ${SALES_ORDER_LOOKBACK_DAYS}j)...`);
+  const params = { filter_created_at_gte: Math.floor(new Date(since).getTime() / 1000) };
   const orders = await edeskListAll('sales-orders', params).catch((e) => { console.warn('  sales-orders:', e.message); return []; });
   const rows = orders.map(extractSalesOrder).filter((r) => r.id != null);
   await sbUpsert('sav_sales_orders', rows, 'id');
@@ -307,8 +327,9 @@ let _loggedTicketKeysOnce = false;
 
 async function syncTicketsAndMessages(channelsById, salesOrdersById) {
   const cursor = await getSyncCursor('tickets');
-  console.log(`▶ Tickets (depuis ${cursor || 'toujours'})...`);
-  const params = cursor ? { filter_last_updated_at_gte: cursor.slice(0, 10) } : {};
+  const since = effectiveSince(cursor, TICKET_LOOKBACK_DAYS);
+  console.log(`▶ Tickets (depuis ${since}, fenêtre max ${TICKET_LOOKBACK_DAYS}j)...`);
+  const params = { filter_last_updated_at_gte: since.slice(0, 10) };
   const tickets = await edeskListAll('tickets', params).catch((e) => { console.warn('  tickets:', e.message); return []; });
   console.log(`  ${tickets.length} tickets à traiter.`);
 
