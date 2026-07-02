@@ -1,0 +1,52 @@
+name: eDesk Sync
+
+on:
+  # Toutes les heures — les tickets SAV doivent rester frais pour la priorisation.
+  schedule:
+    - cron: "0 * * * *"
+
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: "Dry run (n'écrit rien dans Supabase, affiche un échantillon)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+      full_sync:
+        description: "Full sync (ignore le curseur incrémental, retélécharge tout)"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
+
+jobs:
+  sync:
+    name: Sync eDesk → Supabase
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      - name: Run eDesk sync
+        env:
+          EDESK_API_TOKEN: ${{ secrets.EDESK_API_TOKEN }}
+          SUPABASE_URL: ${{ secrets.SUPABASE_URL }}
+          SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
+          DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
+          FULL_SYNC: ${{ github.event.inputs.full_sync || 'false' }}
+        run: node sync/edesk_sync.js
+
+      - name: Notify on failure
+        if: failure()
+        run: |
+          echo "::error::Le sync eDesk a échoué. Vérifiez les logs ci-dessus."
+          echo "::error::Vérifiez que les secrets EDESK_API_TOKEN, SUPABASE_URL et SUPABASE_SERVICE_ROLE_KEY sont bien configurés dans Settings > Secrets > Actions."
+          echo "::error::Le jeton eDesk expire par défaut à 90 jours — pensez à le régénérer si l'erreur est un 401."
