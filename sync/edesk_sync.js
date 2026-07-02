@@ -82,7 +82,7 @@ async function edeskListAll(resource, params = {}, pageSize = 100, maxPages = 50
 function pickArray(data) {
   if (Array.isArray(data)) return data;
   if (!data || typeof data !== 'object') return [];
-  for (const key of ['data', 'items', 'results', 'tickets', 'sales_orders', 'messages', 'contacts', 'channels', 'tags', 'tag_groups', 'templates', 'users', 'order_notes']) {
+  for (const key of ['data', 'items', 'results', 'tickets', 'sales_orders', 'sales-orders', 'messages', 'contacts', 'channels', 'tags', 'tag_groups', 'tag-groups', 'templates', 'users', 'order_notes', 'order-notes']) {
     if (Array.isArray(data[key])) return data[key];
   }
   return [];
@@ -213,7 +213,7 @@ async function syncReferenceData() {
   const [channels, users, tagGroups, tags, templates, contacts] = await Promise.all([
     edeskListAll('channels').catch((e) => { console.warn('  channels:', e.message); return []; }),
     edeskListAll('users').catch((e) => { console.warn('  users:', e.message); return []; }),
-    edeskListAll('tag_groups').catch((e) => { console.warn('  tag_groups:', e.message); return []; }),
+    edeskListAll('tag-groups').catch((e) => { console.warn('  tag-groups:', e.message); return []; }),
     edeskListAll('tags').catch((e) => { console.warn('  tags:', e.message); return []; }),
     edeskListAll('templates').catch((e) => { console.warn('  templates:', e.message); return []; }),
     edeskListAll('contacts').catch((e) => { console.warn('  contacts:', e.message); return []; }),
@@ -232,13 +232,13 @@ async function syncSalesOrders() {
   const cursor = await getSyncCursor('sales_orders');
   console.log(`▶ Sales orders (depuis ${cursor || 'toujours'})...`);
   const params = cursor ? { filter_created_at_gte: Math.floor(new Date(cursor).getTime() / 1000) } : {};
-  const orders = await edeskListAll('sales_orders', params).catch((e) => { console.warn('  sales_orders:', e.message); return []; });
+  const orders = await edeskListAll('sales-orders', params).catch((e) => { console.warn('  sales-orders:', e.message); return []; });
   const rows = orders.map(extractSalesOrder).filter((r) => r.id != null);
   await sbUpsert('sav_sales_orders', rows, 'id');
   console.log(`  ${rows.length} commandes.`);
 
   console.log('▶ Order notes...');
-  const notes = await edeskListAll('order_notes', params).catch((e) => { console.warn('  order_notes:', e.message); return []; });
+  const notes = await edeskListAll('order-notes', params).catch((e) => { console.warn('  order-notes:', e.message); return []; });
   const noteRows = notes.map(extractOrderNote).filter((r) => r.id != null);
   await sbUpsert('sav_order_notes', noteRows, 'id');
   console.log(`  ${noteRows.length} notes.`);
