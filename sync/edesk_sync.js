@@ -234,30 +234,13 @@ function extractOrderNote(n) {
   };
 }
 
-function extractMessage(m, ticketId) {
-  return {
-    id: pick(m, 'id'),
-    ticket_id: ticketId,
-    direction: pick(m, 'direction', 'type'),
-    body: pick(m, 'body', 'content', 'text'),
-    author_name: pick(m, 'author_name', 'from_name', 'sender_name'),
-    created_at: pick(m, 'created_at'),
-    raw: m,
-  };
-}
-
-// L'API eDesk n'expose pas de "liste des messages filtrable par ticket" en
-// endpoint séparé (uniquement GET /messages/{id} par ID précis, confirmé par
-// l'erreur 404 sur /messages?filter_ticket_id_equals=...) — les messages sont
-// vraisemblablement inclus dans le détail du ticket (GET /tickets/{id}).
-// Essaie plusieurs noms de champs candidats pour le fil de conversation.
-function extractEmbeddedMessages(ticketDetail) {
-  // GET /tickets/{id} enveloppe la ressource dans { data: {...} } (confirmé en prod —
-  // les clés de premier niveau du détail ne contenaient que "data"), contrairement aux
-  // listes où pickArray() gère déjà ce même wrapper pour les tableaux.
-  const body = (ticketDetail && typeof ticketDetail.data === 'object' && ticketDetail.data) || ticketDetail;
-  const thread = pick(body, 'messages', 'thread', 'conversation', 'emails') || [];
-  return Array.isArray(thread) ? thread : [];
+// GET /tickets/{id} enveloppe la ressource dans { data: {...} } et n'embarque PAS le
+// corps des messages, seulement leurs IDs (`messages_ids`, confirmé en prod). Le nombre
+// de messages suffit pour la priorisation (relances multiples) ; le corps complet
+// nécessiterait un appel /messages/{id} par ID, trop coûteux en quota pour la v1 (2000+
+// tickets x plusieurs messages) pour une donnée qu'aucun des 3 onglets n'exploite encore.
+function extractTicketDetailBody(ticketDetail) {
+  return (ticketDetail && typeof ticketDetail.data === 'object' && ticketDetail.data) || ticketDetail || {};
 }
 
 function extractTags(t) {
@@ -331,8 +314,6 @@ async function syncSalesOrders() {
   return bySalesOrderId;
 }
 
-let _loggedTicketKeysOnce = false;
-
 async function syncTicketsAndMessages(channelsById, salesOrdersById) {
   const cursor = await getSyncCursor('tickets');
   const since = effectiveSince(cursor, TICKET_LOOKBACK_DAYS);
@@ -342,7 +323,6 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
   console.log(`  ${tickets.length} tickets à traiter.`);
 
   const ticketRows = [];
-  const allMessageRows = [];
   let sample = null;
 
   for (const raw of tickets) {
@@ -352,29 +332,18 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
     const so = salesOrderId != null ? salesOrdersById.get(String(salesOrderId)) : null;
     const channelId = pick(raw, 'channel_id');
 
-    let messages = [];
+    let messageCount = 0;
     try {
-      // Pas de "liste messages" filtrable par ticket dans l'API (GET /messages
-      // n'existe qu'avec un {messageId} précis, confirmé par un 404 en prod) —
-      // le détail du ticket embarque vraisemblablement le fil de conversation.
       const detail = await edeskGetSmart(`/tickets/${id}`);
-      messages = extractEmbeddedMessages(detail);
-      if (!messages.length && !_loggedTicketKeysOnce) {
-        _loggedTicketKeysOnce = true;
-        const body = (detail && typeof detail.data === 'object' && detail.data) || detail;
-        console.log(`  🔎 diagnostic — clés du détail ticket ${id} : ${Object.keys(detail || {}).join(', ')} | clés de data : ${Object.keys(body || {}).join(', ')}`);
-      }
+      const body = extractTicketDetailBody(detail);
+      const messagesIds = pick(body, 'messages_ids') || [];
+      messageCount = Array.isArray(messagesIds) ? messagesIds.length : 0;
     } catch (e) {
       console.warn(`  détail ticket ${id}:`, e.message);
     }
     await sleep(200); // espace les appels /tickets/{id} pour rester sous le quota
-    const messageRows = messages.map((m) => extractMessage(m, id)).filter((m) => m.id != null);
-    allMessageRows.push(...messageRows);
 
-    const lastMessageAt = messageRows.reduce((max, m) => (m.created_at && (!max || m.created_at > max) ? m.created_at : max), null);
-    const firstOutbound = messageRows
-      .filter((m) => String(m.direction || '').toLowerCase().includes('out'))
-      .sort((a, b) => (a.created_at || '').localeCompare(b.created_at || ''))[0];
+    const lastMessageAt = pick(raw, 'last_updated_at', 'updated_at');
 
     const ticketForClassification = {
       subject: pick(raw, 'subject', 'title'),
@@ -388,8 +357,8 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
       category,
       subject: ticketForClassification.subject,
       created_at: pick(raw, 'created_at'),
-      last_message_at: lastMessageAt || pick(raw, 'last_updated_at', 'updated_at'),
-      message_count: messageRows.length,
+      last_message_at: lastMessageAt,
+      message_count: messageCount,
       order_value: so?.total_value,
       channel_name: channelsById.get(String(channelId)) || null,
     };
@@ -410,13 +379,12 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
       priority_level: level,
       priority_reasons: reasons,
       tags: ticketForClassification.tags,
-      message_count: messageRows.length,
+      message_count: messageCount,
       order_value: so?.total_value ?? null,
       order_refs: so?.order_refs ?? [],
       created_at: pick(raw, 'created_at'),
       updated_at: pick(raw, 'last_updated_at', 'updated_at'),
       last_message_at: lastMessageAt,
-      first_response_at: firstOutbound?.created_at ?? null,
       raw,
       synced_at: new Date().toISOString(),
     };
@@ -425,10 +393,9 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
   }
 
   await sbUpsert('sav_tickets', ticketRows, 'id');
-  await sbUpsert('sav_messages', allMessageRows, 'id');
   await setSyncCursor('tickets', new Date().toISOString());
 
-  console.log(`  ${ticketRows.length} tickets synchronisés, ${allMessageRows.length} messages.`);
+  console.log(`  ${ticketRows.length} tickets synchronisés.`);
   if (sample) {
     console.log('\n📋 Exemple de ticket classifié :');
     console.log(`  #${sample.id} — ${sample.subject || '(sans sujet)'} — catégorie=${sample.category} priorité=${sample.priority_level} (${sample.priority_score})`);
