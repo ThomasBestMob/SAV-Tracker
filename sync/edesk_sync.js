@@ -200,6 +200,16 @@ function extractMessage(m, ticketId) {
   };
 }
 
+// L'API eDesk n'expose pas de "liste des messages filtrable par ticket" en
+// endpoint séparé (uniquement GET /messages/{id} par ID précis, confirmé par
+// l'erreur 404 sur /messages?filter_ticket_id_equals=...) — les messages sont
+// vraisemblablement inclus dans le détail du ticket (GET /tickets/{id}).
+// Essaie plusieurs noms de champs candidats pour le fil de conversation.
+function extractEmbeddedMessages(ticketDetail) {
+  const thread = pick(ticketDetail, 'messages', 'thread', 'conversation', 'emails') || [];
+  return Array.isArray(thread) ? thread : [];
+}
+
 function extractTags(t) {
   const tags = pick(t, 'tags') || [];
   if (!Array.isArray(tags)) return [];
@@ -268,10 +278,13 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
 
     let messages = [];
     try {
-      const msgData = await edeskListAll('messages', { filter_ticket_id_equals: id }, 100, 20);
-      messages = msgData;
+      // Pas de "liste messages" filtrable par ticket dans l'API (GET /messages
+      // n'existe qu'avec un {messageId} précis, confirmé par un 404 en prod) —
+      // le détail du ticket embarque vraisemblablement le fil de conversation.
+      const detail = await edeskGetSmart(`/tickets/${id}`);
+      messages = extractEmbeddedMessages(detail);
     } catch (e) {
-      console.warn(`  messages ticket ${id}:`, e.message);
+      console.warn(`  détail ticket ${id}:`, e.message);
     }
     const messageRows = messages.map((m) => extractMessage(m, id)).filter((m) => m.id != null);
     allMessageRows.push(...messageRows);
