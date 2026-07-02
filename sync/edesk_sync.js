@@ -84,15 +84,22 @@ async function edeskGetSmart(path, params) {
   }
 }
 
-async function edeskListAll(resource, params = {}, pageSize = 100, maxPages = 500) {
+// Pagination confirmée sur developers.edesk.com/reference/pagination :
+// paramètres `page` + `itemsPerPage` (camelCase), réponse avec un objet
+// `paginator.totalItemsCount`. Les anciens noms (per_page/limit) étaient
+// ignorés par le serveur, qui retombait sur sa taille de page par défaut (20)
+// à chaque appel — d'où le blocage après la 1ère page observé en prod.
+async function edeskListAll(resource, params = {}, itemsPerPage = 100, maxPages = 1000) {
   const items = [];
   let page = 1;
   for (; page <= maxPages; page++) {
-    const data = await edeskGetSmart(`/${resource}`, { ...params, page, per_page: pageSize, limit: pageSize });
+    const data = await edeskGetSmart(`/${resource}`, { ...params, page, itemsPerPage });
     const batch = pickArray(data);
-    if (!batch.length) break;
     items.push(...batch);
-    if (batch.length < pageSize) break;
+    const total = data && typeof data === 'object' ? data.paginator?.totalItemsCount : null;
+    if (!batch.length) break;
+    if (total != null && items.length >= total) break;
+    if (total == null && batch.length < itemsPerPage) break; // filet de sécurité si pas de paginator
   }
   return items;
 }
@@ -296,6 +303,8 @@ async function syncSalesOrders() {
   return bySalesOrderId;
 }
 
+let _loggedTicketKeysOnce = false;
+
 async function syncTicketsAndMessages(channelsById, salesOrdersById) {
   const cursor = await getSyncCursor('tickets');
   console.log(`▶ Tickets (depuis ${cursor || 'toujours'})...`);
@@ -321,6 +330,10 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
       // le détail du ticket embarque vraisemblablement le fil de conversation.
       const detail = await edeskGetSmart(`/tickets/${id}`);
       messages = extractEmbeddedMessages(detail);
+      if (!messages.length && !_loggedTicketKeysOnce) {
+        _loggedTicketKeysOnce = true;
+        console.log(`  🔎 diagnostic — clés de premier niveau du détail ticket ${id} : ${Object.keys(detail || {}).join(', ')}`);
+      }
     } catch (e) {
       console.warn(`  détail ticket ${id}:`, e.message);
     }
