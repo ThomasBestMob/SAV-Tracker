@@ -252,7 +252,11 @@ function extractMessage(m, ticketId) {
 // vraisemblablement inclus dans le détail du ticket (GET /tickets/{id}).
 // Essaie plusieurs noms de champs candidats pour le fil de conversation.
 function extractEmbeddedMessages(ticketDetail) {
-  const thread = pick(ticketDetail, 'messages', 'thread', 'conversation', 'emails') || [];
+  // GET /tickets/{id} enveloppe la ressource dans { data: {...} } (confirmé en prod —
+  // les clés de premier niveau du détail ne contenaient que "data"), contrairement aux
+  // listes où pickArray() gère déjà ce même wrapper pour les tableaux.
+  const body = (ticketDetail && typeof ticketDetail.data === 'object' && ticketDetail.data) || ticketDetail;
+  const thread = pick(body, 'messages', 'thread', 'conversation', 'emails') || [];
   return Array.isArray(thread) ? thread : [];
 }
 
@@ -306,7 +310,11 @@ async function syncSalesOrders() {
   const cursor = await getSyncCursor('sales_orders');
   const since = effectiveSince(cursor, SALES_ORDER_LOOKBACK_DAYS);
   console.log(`▶ Sales orders (depuis ${since}, fenêtre max ${SALES_ORDER_LOOKBACK_DAYS}j)...`);
-  const params = { filter_created_at_gte: Math.floor(new Date(since).getTime() / 1000) };
+  // filter_created_at_gte sur /sales-orders attend une date (YYYY-MM-DD), pas un
+  // timestamp Unix : envoyer l'entier faisait planter le parseur DateTime côté
+  // eDesk (500 "Failed to parse time string (<epoch> 00:00:00)"), contrairement
+  // à /tickets qui accepte bien ce format date-string sur filter_last_updated_at_gte.
+  const params = { filter_created_at_gte: since.slice(0, 10) };
   const orders = await edeskListAll('sales-orders', params).catch((e) => { console.warn('  sales-orders:', e.message); return []; });
   const rows = orders.map(extractSalesOrder).filter((r) => r.id != null);
   await sbUpsert('sav_sales_orders', rows, 'id');
@@ -353,7 +361,8 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
       messages = extractEmbeddedMessages(detail);
       if (!messages.length && !_loggedTicketKeysOnce) {
         _loggedTicketKeysOnce = true;
-        console.log(`  🔎 diagnostic — clés de premier niveau du détail ticket ${id} : ${Object.keys(detail || {}).join(', ')}`);
+        const body = (detail && typeof detail.data === 'object' && detail.data) || detail;
+        console.log(`  🔎 diagnostic — clés du détail ticket ${id} : ${Object.keys(detail || {}).join(', ')} | clés de data : ${Object.keys(body || {}).join(', ')}`);
       }
     } catch (e) {
       console.warn(`  détail ticket ${id}:`, e.message);
