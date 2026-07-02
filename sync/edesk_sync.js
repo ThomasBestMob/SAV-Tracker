@@ -239,9 +239,19 @@ function extractTags(t) {
 // ── Main ─────────────────────────────────────────────────────────────
 
 async function syncReferenceData() {
-  console.log('▶ Canaux, utilisateurs, tags, templates, contacts...');
+  console.log('▶ Canaux, utilisateurs, groupes de tags, templates, contacts...');
   // Séquentiel (pas Promise.all) + petite pause entre chaque ressource : 6 appels
   // concurrents ont suffi à déclencher un 429 "Out of quota" en prod.
+  //
+  // NB : /tags ("Tag Items" dans le libellé de la permission accordée) n'est PAS
+  // une petite liste de définitions de tags — c'est le journal de chaque
+  // application d'un tag sur un ticket, dans tout l'historique du compte
+  // (83 500 lignes / 835 pages observées en prod, épuise le quota à chaque run).
+  // Pas nécessaire pour la v1 : les tags pertinents par ticket sont déjà
+  // embarqués dans la réponse /tickets (ticket.tags -> sav_tickets.tags),
+  // utilisés directement par la classification. sav_tags reste vide pour
+  // l'instant — à réactiver plus tard uniquement si besoin d'un historique
+  // complet des tags appliqués, avec une vraie stratégie de pagination longue.
   async function fetchResource(name, label) {
     try {
       const rows = await edeskListAll(name);
@@ -255,16 +265,14 @@ async function syncReferenceData() {
   const channels = await fetchResource('channels', 'channels');
   const users = await fetchResource('users', 'users');
   const tagGroups = await fetchResource('tag-groups', 'tag-groups');
-  const tags = await fetchResource('tags', 'tags');
   const templates = await fetchResource('templates', 'templates');
   const contacts = await fetchResource('contacts', 'contacts');
   await sbUpsert('sav_channels', channels.map(extractChannel), 'id');
   await sbUpsert('sav_users', users.map(extractUser), 'id');
   await sbUpsert('sav_tag_groups', tagGroups.map(extractTagGroup), 'id');
-  await sbUpsert('sav_tags', tags.map(extractTag), 'id');
   await sbUpsert('sav_templates', templates.map(extractTemplate), 'id');
   await sbUpsert('sav_contacts', contacts.map(extractContact), 'id');
-  console.log(`  ${channels.length} canaux, ${users.length} users, ${tags.length} tags, ${templates.length} templates, ${contacts.length} contacts.`);
+  console.log(`  ${channels.length} canaux, ${users.length} users, ${tagGroups.length} groupes de tags, ${templates.length} templates, ${contacts.length} contacts.`);
   return { channelsById: new Map(channels.map((c) => [String(pick(c, 'id')), extractChannel(c).name])) };
 }
 
