@@ -33,6 +33,8 @@ if (!SB_URL || !SB_KEY) { console.error('❌ SUPABASE_URL / SUPABASE_SERVICE_KEY
 
 // ── HTTP helpers ─────────────────────────────────────────────────────
 
+function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
+
 async function edeskGet(path, params = {}) {
   const url = new URL(`${EDESK_BASE}${path}`);
   Object.entries(params).forEach(([k, v]) => { if (v != null) url.searchParams.set(k, v); });
@@ -49,19 +51,37 @@ async function edeskGet(path, params = {}) {
 }
 
 let _authMode = 'bearer';
+
+// Retry avec backoff sur 429 ("Out of quota" observé en prod) — respecte
+// Retry-After si présent, sinon backoff exponentiel. Ne masque pas une vraie
+// panne : abandonne après MAX_RETRIES et laisse l'appelant gérer (déjà en
+// try/catch partout, un ticket qui échoue n'interrompt pas les autres).
+const MAX_429_RETRIES = 5;
+
 async function edeskGetSmart(path, params) {
-  let r = await edeskGet(path, params);
-  if (r.status === 401 && _authMode === 'bearer') {
-    _authMode = 'x-api-key';
-    const url = new URL(`${EDESK_BASE}${path}`);
-    Object.entries(params || {}).forEach(([k, v]) => { if (v != null) url.searchParams.set(k, v); });
-    r = await fetch(url, { headers: { 'X-API-KEY': EDESK_TOKEN, Accept: 'application/json' } });
+  let attempt = 0;
+  for (;;) {
+    let r = await edeskGet(path, params);
+    if (r.status === 401 && _authMode === 'bearer') {
+      _authMode = 'x-api-key';
+      const url = new URL(`${EDESK_BASE}${path}`);
+      Object.entries(params || {}).forEach(([k, v]) => { if (v != null) url.searchParams.set(k, v); });
+      r = await fetch(url, { headers: { 'X-API-KEY': EDESK_TOKEN, Accept: 'application/json' } });
+    }
+    if (r.status === 429 && attempt < MAX_429_RETRIES) {
+      attempt += 1;
+      const retryAfterHeader = parseInt(r.headers.get('retry-after') || '', 10);
+      const waitMs = Number.isFinite(retryAfterHeader) ? retryAfterHeader * 1000 : Math.min(30000, 1000 * 2 ** attempt);
+      console.warn(`  429 sur ${path} — attente ${Math.round(waitMs / 1000)}s puis retry (${attempt}/${MAX_429_RETRIES})`);
+      await sleep(waitMs);
+      continue;
+    }
+    if (!r.ok) {
+      const t = await r.text().catch(() => '');
+      throw new Error(`eDesk ${r.status} sur ${path} : ${t.slice(0, 300)}`);
+    }
+    return r.json();
   }
-  if (!r.ok) {
-    const t = await r.text().catch(() => '');
-    throw new Error(`eDesk ${r.status} sur ${path} : ${t.slice(0, 300)}`);
-  }
-  return r.json();
 }
 
 async function edeskListAll(resource, params = {}, pageSize = 100, maxPages = 500) {
@@ -220,14 +240,24 @@ function extractTags(t) {
 
 async function syncReferenceData() {
   console.log('▶ Canaux, utilisateurs, tags, templates, contacts...');
-  const [channels, users, tagGroups, tags, templates, contacts] = await Promise.all([
-    edeskListAll('channels').catch((e) => { console.warn('  channels:', e.message); return []; }),
-    edeskListAll('users').catch((e) => { console.warn('  users:', e.message); return []; }),
-    edeskListAll('tag-groups').catch((e) => { console.warn('  tag-groups:', e.message); return []; }),
-    edeskListAll('tags').catch((e) => { console.warn('  tags:', e.message); return []; }),
-    edeskListAll('templates').catch((e) => { console.warn('  templates:', e.message); return []; }),
-    edeskListAll('contacts').catch((e) => { console.warn('  contacts:', e.message); return []; }),
-  ]);
+  // Séquentiel (pas Promise.all) + petite pause entre chaque ressource : 6 appels
+  // concurrents ont suffi à déclencher un 429 "Out of quota" en prod.
+  async function fetchResource(name, label) {
+    try {
+      const rows = await edeskListAll(name);
+      await sleep(300);
+      return rows;
+    } catch (e) {
+      console.warn(`  ${label}:`, e.message);
+      return [];
+    }
+  }
+  const channels = await fetchResource('channels', 'channels');
+  const users = await fetchResource('users', 'users');
+  const tagGroups = await fetchResource('tag-groups', 'tag-groups');
+  const tags = await fetchResource('tags', 'tags');
+  const templates = await fetchResource('templates', 'templates');
+  const contacts = await fetchResource('contacts', 'contacts');
   await sbUpsert('sav_channels', channels.map(extractChannel), 'id');
   await sbUpsert('sav_users', users.map(extractUser), 'id');
   await sbUpsert('sav_tag_groups', tagGroups.map(extractTagGroup), 'id');
@@ -286,6 +316,7 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
     } catch (e) {
       console.warn(`  détail ticket ${id}:`, e.message);
     }
+    await sleep(200); // espace les appels /tickets/{id} pour rester sous le quota
     const messageRows = messages.map((m) => extractMessage(m, id)).filter((m) => m.id != null);
     allMessageRows.push(...messageRows);
 
