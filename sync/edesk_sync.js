@@ -214,24 +214,30 @@ function extractTemplate(t) {
   return { id: pick(t, 'id'), name: pick(t, 'name', 'title'), body: pick(t, 'body', 'content'), raw: t, updated_at: new Date().toISOString() };
 }
 
-// Réf produits (SKU) des lignes de commande — plusieurs formes possibles selon
-// la version d'API (line_items / order_lines / products), champ SKU sous
-// plusieurs noms candidats.
+// Réf produits (SKU) des lignes de commande. Structure confirmée en prod :
+// order.order_items[] -> { product: { sku, ... }, ... } — le SKU est imbriqué
+// sous `product`, pas directement sur la ligne (contrairement à ce qu'on
+// supposait avant d'avoir un exemple réel). On garde les anciens noms de
+// champs en repli au cas où une autre marketplace renverrait une forme différente.
 function extractOrderRefs(o) {
-  const lines = pick(o, 'line_items', 'order_lines', 'products', 'items') || [];
+  const lines = pick(o, 'order_items', 'line_items', 'order_lines', 'products', 'items') || [];
   if (!Array.isArray(lines)) return [];
-  const refs = lines.map((l) => pick(l, 'sku', 'seller_sku', 'product_ref', 'reference')).filter(Boolean);
+  const refs = lines
+    .map((l) => pick(l, 'sku', 'seller_sku', 'product_ref', 'reference') || pick(l.product || {}, 'sku', 'seller_sku', 'product_ref', 'reference'))
+    .filter(Boolean);
   return [...new Set(refs.map(String))];
 }
 
 function extractSalesOrder(o) {
+  const items = pick(o, 'order_items') || [];
+  const firstProduct = (Array.isArray(items) && items[0]?.product) || {};
   return {
     id: pick(o, 'id'),
     channel_id: pick(o, 'channel_id'),
     order_reference: pick(o, 'seller_order_id', 'order_reference', 'reference'),
     order_date: pick(o, 'order_date', 'created_at'),
-    total_value: Number(pick(o, 'total', 'total_value', 'grand_total')) || null,
-    currency: pick(o, 'currency'),
+    total_value: Number(pick(o, 'total_amount', 'total', 'total_value', 'grand_total')) || null,
+    currency: pick(o, 'currency') || pick(firstProduct, 'currency'),
     order_refs: extractOrderRefs(o),
     raw: o,
     updated_at: new Date().toISOString(),
@@ -397,6 +403,7 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
       message_count: messageCount,
       order_value: so?.total_value ?? null,
       order_refs: so?.order_refs ?? [],
+      order_reference: so?.order_reference ?? null,
       created_at: pick(raw, 'created_at'),
       updated_at: pick(raw, 'last_updated_at', 'updated_at'),
       last_message_at: lastMessageAt,

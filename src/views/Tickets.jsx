@@ -49,7 +49,7 @@ export default function Tickets({ selectedChannel, period }) {
     setLoading(true);
     let query = supabase
       .from('sav_tickets')
-      .select('id,subject,category,status,priority_score,priority_level,priority_reasons,channel_id,channel_name,order_refs,order_value,created_at,last_message_at,message_count')
+      .select('id,subject,category,status,priority_score,priority_level,priority_reasons,channel_id,channel_name,order_refs,order_reference,order_value,created_at,last_message_at,message_count')
       .neq('status', 'closed')
       .gte('created_at', periodStart(period))
       .order('priority_score', { ascending: false })
@@ -186,9 +186,9 @@ export default function Tickets({ selectedChannel, period }) {
                 </div>
                 <div className="flex flex-col items-end gap-2 shrink-0">
                   <span className="num text-lg font-medium text-accent">{t.priority_score}</span>
-                  {t.category === 'facture' && t.order_refs?.[0] && (
+                  {t.category === 'facture' && t.order_reference && (
                     <button
-                      onClick={() => downloadInvoice(t.order_refs[0])}
+                      onClick={() => downloadInvoice(t.order_reference)}
                       className="text-[10px] uppercase tracking-wider px-2 py-1 border border-accent text-accent hover:bg-accent hover:text-white transition-colors whitespace-nowrap"
                     >
                       Facture PDF
