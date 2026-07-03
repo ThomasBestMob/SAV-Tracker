@@ -264,6 +264,28 @@ function extractTicketDetailBody(ticketDetail) {
   return (ticketDetail && typeof ticketDetail.data === 'object' && ticketDetail.data) || ticketDetail || {};
 }
 
+// Corps intégral du premier message du ticket (la plainte initiale du client),
+// via GET /messages/{id} — seul endpoint disponible (pas de liste filtrable
+// par ticket, confirmé par un 404 en prod). On ne va chercher que le premier
+// message (messages_ids[0]) pour limiter le coût en quota API à 1 appel de
+// plus par ticket plutôt que 1 par message.
+let _loggedMessageKeysOnce = false;
+function extractMessageBody(messageDetail, id) {
+  const body = extractTicketDetailBody(messageDetail);
+  if (!_loggedMessageKeysOnce) {
+    _loggedMessageKeysOnce = true;
+    console.log(`  🔎 diagnostic — clés du message ${id} : ${Object.keys(body || {}).join(', ')}`);
+  }
+  return {
+    id: pick(body, 'id') ?? id,
+    body: pick(body, 'body', 'content', 'text', 'message'),
+    direction: pick(body, 'direction', 'type'),
+    author_name: pick(body, 'author_name', 'from_name', 'sender_name'),
+    created_at: pick(body, 'created_at'),
+    raw: body,
+  };
+}
+
 function extractTags(t) {
   const tags = pick(t, 'tags') || [];
   if (!Array.isArray(tags)) return [];
@@ -354,15 +376,21 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
     const channelId = pick(raw, 'channel_id');
 
     let messageCount = 0;
+    let firstMessage = null;
     try {
       const detail = await edeskGetSmart(`/tickets/${id}`);
       const body = extractTicketDetailBody(detail);
       const messagesIds = pick(body, 'messages_ids') || [];
       messageCount = Array.isArray(messagesIds) ? messagesIds.length : 0;
+      if (messagesIds.length) {
+        await sleep(150);
+        const messageDetail = await edeskGetSmart(`/messages/${messagesIds[0]}`);
+        firstMessage = extractMessageBody(messageDetail, messagesIds[0]);
+      }
     } catch (e) {
       console.warn(`  détail ticket ${id}:`, e.message);
     }
-    await sleep(200); // espace les appels /tickets/{id} pour rester sous le quota
+    await sleep(200); // espace les appels /tickets/{id} et /messages/{id} pour rester sous le quota
 
     const lastMessageAt = pick(raw, 'last_updated_at', 'updated_at');
 
@@ -404,6 +432,9 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
       order_value: so?.total_value ?? null,
       order_refs: so?.order_refs ?? [],
       order_reference: so?.order_reference ?? null,
+      first_message_body: firstMessage?.body ?? null,
+      first_message_author: firstMessage?.author_name ?? null,
+      first_message_raw: firstMessage?.raw ?? null,
       created_at: pick(raw, 'created_at'),
       updated_at: pick(raw, 'last_updated_at', 'updated_at'),
       last_message_at: lastMessageAt,

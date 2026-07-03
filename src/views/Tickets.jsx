@@ -44,12 +44,21 @@ export default function Tickets({ selectedChannel, period }) {
   const [loading, setLoading] = useState(true);
   const [categoryFilter, setCategoryFilter] = useState('all');
   const [sortBy, setSortBy] = useState('priority');
+  const [expandedIds, setExpandedIds] = useState(() => new Set());
+
+  function toggleExpanded(id) {
+    setExpandedIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  }
 
   useEffect(() => {
     setLoading(true);
     let query = supabase
       .from('sav_tickets')
-      .select('id,subject,category,status,priority_score,priority_level,priority_reasons,channel_id,channel_name,order_refs,order_reference,order_value,created_at,last_message_at,message_count')
+      .select('id,subject,category,status,priority_score,priority_level,priority_reasons,channel_id,channel_name,order_refs,order_reference,order_value,created_at,last_message_at,message_count,first_message_body,first_message_author')
       .neq('status', 'closed')
       .gte('created_at', periodStart(period))
       .order('priority_score', { ascending: false })
@@ -177,11 +186,29 @@ export default function Tickets({ selectedChannel, period }) {
                   <div className="font-medium text-sm truncate">{t.subject || '(sans sujet)'}</div>
                   <div className="text-xs text-muted mt-1">
                     #{t.id} · {t.created_at ? new Date(t.created_at).toLocaleDateString('fr-FR') : '—'}
-                    {t.order_refs?.length ? ` · ${t.order_refs.join(', ')}` : ''}
+                    {t.order_refs?.length ? ` · Réf. produit : ${t.order_refs.join(', ')}` : ''}
                     {t.order_value ? ` · ${Number(t.order_value).toFixed(0)} €` : ''}
                   </div>
                   {t.priority_reasons?.length > 0 && (
                     <div className="text-[11px] text-muted mt-1.5 italic">{t.priority_reasons[0]}</div>
+                  )}
+                  {t.first_message_body && (
+                    <div className="mt-2">
+                      <button
+                        onClick={() => toggleExpanded(t.id)}
+                        className="text-[10px] uppercase tracking-wider text-accent hover:underline"
+                      >
+                        {expandedIds.has(t.id) ? 'Masquer le message' : 'Voir le message du client'}
+                      </button>
+                      {expandedIds.has(t.id) && (
+                        <div className="mt-1.5 p-3 bg-ink/[0.03] border border-ink/10 text-xs whitespace-pre-wrap">
+                          {t.first_message_author && (
+                            <div className="text-[10px] uppercase tracking-wider text-muted mb-1">{t.first_message_author}</div>
+                          )}
+                          {t.first_message_body}
+                        </div>
+                      )}
+                    </div>
                   )}
                 </div>
                 <div className="flex flex-col items-end gap-2 shrink-0">
