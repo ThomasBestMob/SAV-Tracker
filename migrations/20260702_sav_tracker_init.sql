@@ -153,6 +153,18 @@ ALTER TABLE sav_tickets      ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sav_messages     ENABLE ROW LEVEL SECURITY;
 ALTER TABLE sav_sync_state   ENABLE ROW LEVEL SECURITY;
 
+DROP POLICY IF EXISTS "public read sav_channels"     ON sav_channels;
+DROP POLICY IF EXISTS "public read sav_contacts"     ON sav_contacts;
+DROP POLICY IF EXISTS "public read sav_users"        ON sav_users;
+DROP POLICY IF EXISTS "public read sav_tag_groups"   ON sav_tag_groups;
+DROP POLICY IF EXISTS "public read sav_tags"         ON sav_tags;
+DROP POLICY IF EXISTS "public read sav_templates"    ON sav_templates;
+DROP POLICY IF EXISTS "public read sav_sales_orders" ON sav_sales_orders;
+DROP POLICY IF EXISTS "public read sav_order_notes"  ON sav_order_notes;
+DROP POLICY IF EXISTS "public read sav_tickets"      ON sav_tickets;
+DROP POLICY IF EXISTS "public read sav_messages"     ON sav_messages;
+DROP POLICY IF EXISTS "public read sav_sync_state"   ON sav_sync_state;
+
 CREATE POLICY "public read sav_channels"     ON sav_channels     FOR SELECT USING (true);
 CREATE POLICY "public read sav_contacts"     ON sav_contacts     FOR SELECT USING (true);
 CREATE POLICY "public read sav_users"        ON sav_users        FOR SELECT USING (true);
@@ -221,6 +233,9 @@ CREATE TABLE IF NOT EXISTS sav_channel_ratings (
   UNIQUE (channel_id, period)
 );
 ALTER TABLE sav_channel_ratings ENABLE ROW LEVEL SECURITY;
+DROP POLICY IF EXISTS "public read sav_channel_ratings"   ON sav_channel_ratings;
+DROP POLICY IF EXISTS "public write sav_channel_ratings"  ON sav_channel_ratings;
+DROP POLICY IF EXISTS "public update sav_channel_ratings" ON sav_channel_ratings;
 CREATE POLICY "public read sav_channel_ratings"  ON sav_channel_ratings FOR SELECT USING (true);
 CREATE POLICY "public write sav_channel_ratings" ON sav_channel_ratings FOR INSERT WITH CHECK (true);
 CREATE POLICY "public update sav_channel_ratings" ON sav_channel_ratings FOR UPDATE USING (true);
