@@ -1,9 +1,10 @@
 name: eDesk Sync
 
 on:
-  # Toutes les heures — les tickets SAV doivent rester frais pour la priorisation.
-  schedule:
-    - cron: "0 * * * *"
+  # Run automatique horaire désactivé temporairement (échecs répétés en prod,
+  # 2026-07-06) — à réactiver une fois les correctifs de sync stabilisés.
+  # schedule:
+  #   - cron: "0 * * * *"
 
   workflow_dispatch:
     inputs:
