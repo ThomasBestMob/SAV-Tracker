@@ -365,6 +365,16 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
   const tickets = await edeskListAll('tickets', params).catch((e) => { console.warn('  tickets:', e.message); return []; });
   console.log(`  ${tickets.length} tickets à traiter.`);
 
+  // Le premier message d'un ticket (la plainte initiale) ne change jamais une fois
+  // synchronisé — pas la peine de rappeler /messages/{id} à chaque run incrémental
+  // pour un ticket déjà connu, ça double le nombre d'appels API pour rien (source
+  // principale de lenteur / 429 constatés en prod).
+  const existingFirstMessages = await sbSelect(
+    'sav_tickets',
+    `select=id,first_message_body,first_message_author&first_message_body=not.is.null&limit=20000`
+  ).catch(() => []);
+  const firstMessageCache = new Map(existingFirstMessages.map((r) => [String(r.id), r]));
+
   const ticketRows = [];
   let sample = null;
 
@@ -376,13 +386,13 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
     const channelId = pick(raw, 'channel_id');
 
     let messageCount = 0;
-    let firstMessage = null;
+    let firstMessage = firstMessageCache.get(String(id)) || null;
     try {
       const detail = await edeskGetSmart(`/tickets/${id}`);
       const body = extractTicketDetailBody(detail);
       const messagesIds = pick(body, 'messages_ids') || [];
       messageCount = Array.isArray(messagesIds) ? messagesIds.length : 0;
-      if (messagesIds.length) {
+      if (!firstMessage && messagesIds.length) {
         await sleep(150);
         const messageDetail = await edeskGetSmart(`/messages/${messagesIds[0]}`);
         firstMessage = extractMessageBody(messageDetail, messagesIds[0]);
