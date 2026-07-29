@@ -34,6 +34,9 @@ const FULL_SYNC = String(process.env.FULL_SYNC || 'false').toLowerCase() === 'tr
 // large car un ticket récent peut référencer une commande plus ancienne (délais SAV).
 const TICKET_LOOKBACK_DAYS = parseInt(process.env.TICKET_LOOKBACK_DAYS || '14', 10);
 const SALES_ORDER_LOOKBACK_DAYS = parseInt(process.env.SALES_ORDER_LOOKBACK_DAYS || '90', 10);
+// Pour tester rapidement (run manuel) sans traiter tout le backlog : ne garde que les
+// N tickets les plus récents (par last_updated_at) après le fetch de la fenêtre.
+const TICKET_SYNC_LIMIT = process.env.TICKET_SYNC_LIMIT ? parseInt(process.env.TICKET_SYNC_LIMIT, 10) : null;
 
 if (!EDESK_TOKEN) { console.error('❌ EDESK_API_TOKEN requis.'); process.exit(1); }
 if (!SB_URL || !SB_KEY) { console.error('❌ SUPABASE_URL / SUPABASE_SERVICE_KEY requis.'); process.exit(1); }
@@ -362,8 +365,16 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
   const since = effectiveSince(cursor, TICKET_LOOKBACK_DAYS);
   console.log(`▶ Tickets (depuis ${since}, fenêtre max ${TICKET_LOOKBACK_DAYS}j)...`);
   const params = { filter_last_updated_at_gte: since.slice(0, 10) };
-  const tickets = await edeskListAll('tickets', params).catch((e) => { console.warn('  tickets:', e.message); return []; });
-  console.log(`  ${tickets.length} tickets à traiter.`);
+  let tickets = await edeskListAll('tickets', params).catch((e) => { console.warn('  tickets:', e.message); return []; });
+  console.log(`  ${tickets.length} tickets dans la fenêtre.`);
+
+  const limited = TICKET_SYNC_LIMIT != null && tickets.length > TICKET_SYNC_LIMIT;
+  if (limited) {
+    tickets = [...tickets]
+      .sort((a, b) => String(pick(b, 'last_updated_at', 'updated_at') || '').localeCompare(String(pick(a, 'last_updated_at', 'updated_at') || '')))
+      .slice(0, TICKET_SYNC_LIMIT);
+    console.log(`  ⚠ TICKET_SYNC_LIMIT=${TICKET_SYNC_LIMIT} : traite seulement les ${tickets.length} plus récents (test).`);
+  }
 
   // Le premier message d'un ticket (la plainte initiale) ne change jamais une fois
   // synchronisé — pas la peine de rappeler /messages/{id} à chaque run incrémental
@@ -456,7 +467,9 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
   }
 
   await sbUpsert('sav_tickets', ticketRows, 'id');
-  await setSyncCursor('tickets', new Date().toISOString());
+  // Si TICKET_SYNC_LIMIT a tronqué le lot, ne pas avancer le curseur : les tickets
+  // laissés de côté doivent rester couverts par le prochain run normal.
+  if (!limited) await setSyncCursor('tickets', new Date().toISOString());
 
   console.log(`  ${ticketRows.length} tickets synchronisés.`);
   if (sample) {

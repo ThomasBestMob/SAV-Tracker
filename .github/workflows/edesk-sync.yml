@@ -20,6 +20,11 @@ on:
         default: "false"
         type: choice
         options: ["false", "true"]
+      ticket_limit:
+        description: "Test rapide : ne traiter que N tickets les plus récents (vide = tous)"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   sync:
@@ -43,6 +48,7 @@ jobs:
           SUPABASE_SERVICE_KEY: ${{ secrets.SUPABASE_SERVICE_ROLE_KEY }}
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
           FULL_SYNC: ${{ github.event.inputs.full_sync || 'false' }}
+          TICKET_SYNC_LIMIT: ${{ github.event.inputs.ticket_limit }}
         run: node sync/edesk_sync.js
 
       - name: Notify on failure
