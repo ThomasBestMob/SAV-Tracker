@@ -73,8 +73,8 @@ Secrets GitHub requis (Settings → Secrets → Actions) :
    - `VITE_SUPABASE_URL` = `https://pmxsthzdxubqbemdgtbr.supabase.co`
    - `VITE_SUPABASE_ANON_KEY` = clé **anon** Supabase (Settings → API) — jamais la
      `service_role`
-   - (optionnel, pour le bouton facture PDF v2) `PRESTASHOP_API_URL`,
-     `PRESTASHOP_API_KEY`
+   - (pour le bouton facture PDF) `PRESTASHOP_ADMIN_URL`,
+     `PRESTASHOP_ADMIN_EMAIL`, `PRESTASHOP_ADMIN_PASSWORD`
 5. Deploy
 
 ## Architecture
@@ -85,45 +85,79 @@ src/
 ├── main.jsx / index.css       ← entry Vite
 ├── supabaseClient.js          ← client Supabase (clé anon)
 ├── lib/
-│   └── priority.js            ← classification + scoring de priorité des tickets
-│                                 (partagé avec sync/edesk_sync.js, import direct)
+│   ├── priority.js            ← classification des tickets en catégories
+│   │                             (partagé avec sync/edesk_sync.js, import direct)
+│   └── triage.js              ← SLA par canal, action à faire, réponses pré-rédigées
+│                                 (front uniquement : dépend de l'heure courante)
 ├── components/
 │   ├── Header.jsx
 │   └── Atoms.jsx               ← Stat / Card / SectionTitle / PriorityBadge / CategoryPill
 └── views/
-    ├── Tickets.jsx             ← synthèse, courbe tickets/ventes, file priorisée, facture PDF
-    ├── Notation.jsx            ← note (saisie manuelle) + taux SAV par canal
-    └── Products.jsx            ← top 50 taux SAV, recherche par réf, détail en rond
+    ├── Queue.jsx               ← "Ma journée" : file triée par échéance SLA, action + matériel
+    ├── Products.jsx            ← anomalies produit : taux SAV + verbatims clients
+    └── Channels.jsx            ← pilotage canal : respect SLA, taux de contact
 
 sync/
-└── edesk_sync.js               ← pull eDesk (tickets, messages, sales_orders, order_notes,
-                                    contacts, channels, tags, tag_groups, users, templates)
-                                    → upsert Supabase, classification + priorité calculées ici
+└── edesk_sync.js               ← pull eDesk (tickets, sales_orders, order_notes, contacts,
+                                    channels, tag_groups, users, templates) → upsert Supabase
 
 api/
-└── invoice.js                  ← stub Vercel function pour le téléchargement facture PDF
-                                    (TODO v2 : brancher sur PrestaShop order_invoices)
+└── invoice.js                  ← PDF de facture via le back-office PrestaShop (Playwright)
 
 migrations/
-└── 20260702_sav_tracker_init.sql
+├── 20260702_sav_tracker_init.sql
+├── 20260703_ticket_order_reference.sql   ← réf commande + 1er message client
+└── 20260729_order_link_and_channels.sql  ← rattachement PrestaShop, canaux, vues v2
 ```
 
-## Méthodologie de priorisation (résumé — détail dans src/lib/priority.js)
+## Le rattachement ticket → commande PrestaShop
 
-Score 0-100 composite :
-- **Sévérité de catégorie** (0-40 pts) : produit défectueux / réclamation qualité
-  pèsent plus qu'une simple question produit
-- **Âge du ticket** (0-30 pts) : monte vite les premières 24h (risque SLA),
-  plafonne ensuite
-- **Risque canal** (×1.0 à ×1.3) : un ticket en retard sur une marketplace à
-  notation vendeur (Amazon, Cdiscount...) coûte plus cher qu'un ticket site direct
-- **Valeur de la commande** (0-15 pts, échelle log)
-- **Mots-clés d'urgence** dans le sujet (+15 pts)
-- **Relances multiples** — 5+ messages échangés (+10 pts)
-- **Bonus "quick win"** — catégories rapides à traiter type demande de facture
-  (+8 pts), pour désengorger la file même si peu "graves" en soi
+C'est le socle du produit, et il ne coûte aucune intégration supplémentaire :
+`ps_sales_daily` (alimenté par **marketplace-tracker**, même base Supabase) porte
+déjà `order_id` PrestaShop, `lengow_marketplace_order_id` (= la réf commande
+marketplace) et le `product_ref` réel.
 
-Seuils : ≥70 critique · ≥45 haute · ≥20 normale · <20 basse.
+On rattache donc par la **référence commande**, pas par le SKU — trois formats
+observés en prod, d'où les trois règles de la vue `sav_order_link` :
+
+| Format eDesk (`seller_order_id`) | Règle |
+|---|---|
+| `2605131521VS9EP` | réf marketplace brute |
+| `011942999-A` | réf marketplace + suffixe canal |
+| `555636 (BFGAXACUI)` | n° marketplace + réf PrestaShop entre parenthèses |
+
+Ce rattachement débloque d'un coup : la **facture** (il faut l'`order_id` PS),
+les **vraies réfs produit** (le SKU marketplace ne matche pas le catalogue), et
+le **canal canonique** (déjà normalisé dans `ps_sales_daily.marketplace`).
+
+Le taux de rattachement est affiché par canal dans l'onglet Pilotage : sous 70 %,
+le format de référence du canal est probablement mal reconnu.
+
+## Priorisation : échéance, pas score (détail dans src/lib/triage.js)
+
+La file est triée par **échéance de réponse** (SLA du canal appliqué au dernier
+message), pas par un score composite : un agent doit pouvoir justifier l'ordre de
+traitement sans connaître la formule.
+
+SLA par canal — heures calendaires, comme les marketplaces les comptent :
+Amazon / Cdiscount / ManoMano / site 24 h, autres marketplaces 48 h.
+
+Chaque ticket porte aussi une **action** déduite de la catégorie **et** du
+matériel disponible (une demande de facture sans commande rattachée n'est pas la
+même tâche qu'une facture prête à envoyer), plus le matériel pour l'exécuter :
+n° de suivi, lien transporteur, réponse pré-rédigée, PDF de facture.
+
+## Automatisations — règle de sécurité
+
+Les réponses pré-rédigées sont **toujours relues par un agent avant envoi**.
+Deux raisons non négociables :
+
+- **Ne jamais contacter un client marketplace hors plateforme** (Amazon,
+  Cdiscount…) : c'est un motif de suspension de compte. La réponse doit repartir
+  par eDesk. L'e-mail direct n'est acceptable que pour les commandes du site.
+- **Un mauvais rattachement de commande = fuite de données personnelles** (la
+  facture d'un autre client). Le taux de rattachement doit être vérifié par canal
+  avant d'envisager le moindre envoi automatique.
 
 Classification en 7 catégories (facture, livraison, produit défectueux,
 retour/remboursement, info produit, réclamation qualité, autre) via les tags

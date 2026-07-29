@@ -3,14 +3,14 @@ export default function Header({ views, currentView, setCurrentView, channels, s
     <header className="border-b border-ink/10 bg-paper sticky top-0 z-30">
       <div className="max-w-[1400px] mx-auto px-8 py-3 flex justify-between items-center text-[10px] uppercase tracking-widest text-muted border-b border-ink/5">
         <span>BestMobilier · SAV · {new Date().toLocaleDateString('fr-FR', { weekday: 'long', day: 'numeric', month: 'long', year: 'numeric' })}</span>
-        <span className="font-mono">Données eDesk</span>
+        <span className="font-mono">eDesk × PrestaShop</span>
       </div>
       <div className="max-w-[1400px] mx-auto px-8 pt-8 pb-6">
         <h1 className="font-display text-5xl font-medium tracking-tight leading-none">
           SAV Tracker<span className="text-accent">.</span>
         </h1>
         <p className="text-sm text-muted mt-2 max-w-2xl">
-          Priorisation, notation et analyse produit des tickets SAV — site &amp; marketplaces, centralisés via eDesk.
+          Quoi traiter en premier, avec la réponse déjà prête — et ce que les tickets disent de l'offre.
         </p>
       </div>
       <div className="max-w-[1400px] mx-auto px-8 flex items-end justify-between border-t border-ink/10 pt-3 pb-3 gap-6 flex-wrap">

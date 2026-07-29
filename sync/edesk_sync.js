@@ -231,6 +231,26 @@ function extractOrderRefs(o) {
   return [...new Set(refs.map(String))];
 }
 
+// Suivi de livraison — permet de répondre aux "où est ma commande ?" (le plus
+// gros volume de tickets e-commerce) sans intégration transporteur.
+// Le n° de suivi arrive entouré d'apostrophes en prod ("'0000070929555665'"),
+// vraisemblablement un artefact d'export tableur côté marketplace : on nettoie,
+// sinon le numéro est inutilisable tel quel dans une réponse client.
+function extractTracking(o) {
+  const codes = pick(o, 'tracking_codes') || [];
+  const first = Array.isArray(codes) ? codes[0] : null;
+  const dates = pick(o, 'sales_order_delivery_dates') || {};
+  const clean = (v) => (v == null ? null : String(v).replace(/^['"\s]+|['"\s]+$/g, '') || null);
+  return {
+    tracking_code: clean(pick(first || {}, 'tracking_code', 'code')),
+    carrier: clean(pick(first || {}, 'tracking_carrier_name', 'carrier_name', 'carrier')),
+    tracking_url: pick(first || {}, 'tracking_link', 'tracking_url'),
+    shipped_at: pick(o, 'order_shipped_at', 'shipped_at'),
+    expected_delivery_from: pick(dates, 'expected_delivery_from'),
+    expected_delivery_to: pick(dates, 'expected_delivery_to'),
+  };
+}
+
 function extractSalesOrder(o) {
   const items = pick(o, 'order_items') || [];
   const firstProduct = (Array.isArray(items) && items[0]?.product) || {};
@@ -456,6 +476,7 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
       first_message_body: firstMessage?.body ?? null,
       first_message_author: firstMessage?.author_name ?? null,
       first_message_raw: firstMessage?.raw ?? null,
+      ...extractTracking(so?.raw || {}),
       created_at: pick(raw, 'created_at'),
       updated_at: pick(raw, 'last_updated_at', 'updated_at'),
       last_message_at: lastMessageAt,

@@ -1,6 +1,9 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../supabaseClient';
 import { Card, SectionTitle, Loading, Empty, categoryLabel } from '../components/Atoms';
+import { channelLabel } from '../lib/triage';
+
+const MIN_VENTES = 10;
 
 const CATEGORY_COLORS = {
   facture: '#1d5fae',
@@ -54,10 +57,13 @@ export default function Products({ period }) {
 
   useEffect(() => {
     setLoading(true);
+    // Seuil de ventes : sans lui le classement remonte des références à 1 vente
+    // / 1 ticket affichées à 100 % de SAV, qui écrasent les vraies anomalies.
     supabase
       .from('sav_product_stats')
       .select('*')
       .not('nb_tickets_90j', 'eq', 0)
+      .gte('nb_ventes_90j', MIN_VENTES)
       .order('taux_sav_pct', { ascending: false, nullsFirst: false })
       .limit(200)
       .then(({ data, error }) => {
@@ -81,9 +87,9 @@ export default function Products({ period }) {
     setDetailLoading(true);
     setDetailTickets(null);
     const { data, error } = await supabase
-      .from('sav_tickets')
-      .select('id,subject,category,status,priority_level,created_at,order_refs')
-      .contains('order_refs', [ref])
+      .from('sav_ticket_enriched')
+      .select('id,subject,category,status,created_at,product_refs,channel_key,first_message_body,edesk_order_reference')
+      .contains('product_refs', [ref])
       .order('created_at', { ascending: false })
       .limit(100);
     if (!error && data) setDetailTickets(data);
@@ -152,7 +158,7 @@ export default function Products({ period }) {
       </div>
 
       <div>
-        <SectionTitle kicker="Classement" title="Top 50 — taux de SAV" byline={`${top50.length} réf`} />
+        <SectionTitle kicker="Classement" title="Top 50 — taux de SAV" byline={`${top50.length} réf · min. ${MIN_VENTES} ventes`} />
         {loading ? <Loading /> : top50.length === 0 ? <Empty /> : (
           <Card className="p-0 overflow-hidden">
             <table className="w-full text-sm">
@@ -160,6 +166,8 @@ export default function Products({ period }) {
                 <tr className="text-[10px] uppercase tracking-widest text-muted border-b border-ink/10">
                   <th className="text-left px-4 py-3">#</th>
                   <th className="text-left px-4 py-3">Référence</th>
+                  <th className="text-left px-4 py-3">Produit</th>
+                  <th className="text-left px-4 py-3">Motif dominant</th>
                   <th className="text-right px-4 py-3">Tickets (90j)</th>
                   <th className="text-right px-4 py-3">Ventes (90j)</th>
                   <th className="text-right px-4 py-3">Taux SAV</th>
@@ -171,6 +179,10 @@ export default function Products({ period }) {
                   <tr key={s.product_ref} className="border-b border-ink/5 hover:bg-warm/40">
                     <td className="px-4 py-2.5 text-muted font-mono">{i + 1}</td>
                     <td className="px-4 py-2.5 font-mono font-medium">{s.product_ref}</td>
+                    <td className="px-4 py-2.5 text-xs text-muted max-w-[240px] truncate" title={s.product_name || ''}>
+                      {s.product_name || '—'}
+                    </td>
+                    <td className="px-4 py-2.5 text-xs text-muted">{s.top_category ? categoryLabel(s.top_category) : '—'}</td>
                     <td className="px-4 py-2.5 text-right num">{s.nb_tickets_90j}</td>
                     <td className="px-4 py-2.5 text-right num text-muted">{s.nb_ventes_90j}</td>
                     <td className="px-4 py-2.5 text-right num font-medium text-accent">
@@ -214,18 +226,26 @@ export default function Products({ period }) {
                   </Card>
                 )}
                 <div className="text-[10px] uppercase tracking-widest text-muted mb-3">
-                  {detailTickets?.length || 0} ticket(s) — 100 derniers
+                  Ce que disent les clients — {detailTickets?.length || 0} ticket(s)
                 </div>
                 <div className="space-y-2">
                   {(detailTickets || []).map((t) => (
-                    <div key={t.id} className="border border-ink/10 p-3 text-sm flex justify-between gap-3">
-                      <div>
+                    <div key={t.id} className="border border-ink/10 p-3 text-sm">
+                      <div className="flex justify-between gap-3 items-start">
                         <div className="font-medium">{t.subject || '(sans sujet)'}</div>
-                        <div className="text-xs text-muted mt-1">
-                          {categoryLabel(t.category)} · {t.status} · {t.created_at ? new Date(t.created_at).toLocaleDateString('fr-FR') : '—'}
-                        </div>
+                        <span className="text-[10px] uppercase tracking-wider text-muted whitespace-nowrap">
+                          {channelLabel(t.channel_key)}
+                        </span>
                       </div>
-                      <span className="text-[10px] uppercase tracking-wider text-muted whitespace-nowrap">{t.priority_level}</span>
+                      <div className="text-xs text-muted mt-1">
+                        {categoryLabel(t.category)} · {t.created_at ? new Date(t.created_at).toLocaleDateString('fr-FR') : '—'}
+                        {t.edesk_order_reference ? ` · Cmd ${t.edesk_order_reference}` : ''}
+                      </div>
+                      {t.first_message_body && (
+                        <blockquote className="mt-2 text-xs text-ink/80 italic border-l-2 border-accent/30 pl-3 whitespace-pre-wrap max-h-32 overflow-y-auto">
+                          {t.first_message_body}
+                        </blockquote>
+                      )}
                     </div>
                   ))}
                   {detailTickets && detailTickets.length === 0 && <Empty message="Aucun ticket pour cette référence." />}
