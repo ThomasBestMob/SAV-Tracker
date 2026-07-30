@@ -63,12 +63,16 @@ export default async function handler(req, res) {
     let jar = extractCookies(getRes.headers);
     const loginHtml = await getRes.text();
 
-    // Certaines versions de PS injectent un token CSRF dans le formulaire.
-    const tokenMatch = loginHtml.match(/name="token"\s[^>]*value="([^"]+)"/i)
-                    || loginHtml.match(/name="_token"\s[^>]*value="([^"]+)"/i);
+    // Token CSRF — présent sur certaines versions PS, optionnel sinon.
+    // Les deux ordres d'attributs sont couverts (name=... value=... ou value=... name=...).
+    const tokenMatch = loginHtml.match(/name=["']token["'][^>]*value=["']([^"']+)["']/i)
+                    || loginHtml.match(/value=["']([^"']+)["'][^>]*name=["']token["']/i);
     const token = tokenMatch?.[1] ?? '';
 
-    // ── Étape 2 : POST des identifiants ───────────────────────────────────────
+    // ── Étape 2 : POST des identifiants ──────────────────────────────────────
+    // redirect: 'follow' — PS redirige (302) aussi bien en cas de succès que
+    // d'échec. On suit la redirection et on inspecte le contenu de la page
+    // résultante plutôt que l'URL de destination.
     const postRes = await fetch(`${ADMIN_URL}/index.php`, {
       method: 'POST',
       headers: {
@@ -83,33 +87,18 @@ export default async function handler(req, res) {
         submitLogin: '1',
         token,
       }).toString(),
-      redirect: 'manual',
+      redirect: 'follow',
     });
 
     jar = mergeJar(jar, extractCookies(postRes.headers));
+    const postBody = await postRes.text();
 
-    // PS redirige vers le dashboard après un login réussi (302 → Location).
-    // S'il renvoie 200 c'est que la page de login s'est réaffichée : refus.
-    const location = postRes.headers.get('location') || '';
-    if (!location) {
-      // Vérifier si la réponse contient encore le formulaire
-      const body = await postRes.text().catch(() => '');
-      if (body.includes('submitLogin') || body.includes('name="passwd"')) {
-        return res.status(502).json({
-          error: 'Connexion au back-office PrestaShop refusée — vérifier les identifiants et que le compte n\'a pas de double authentification.',
-        });
-      }
-    }
-
-    // Suivre la redirection si nécessaire
-    if (location) {
-      const redir = location.startsWith('http') ? location : `${ADMIN_URL}${location.startsWith('/') ? '' : '/'}${location}`;
-      const dashRes = await fetch(redir, {
-        headers: { 'Cookie': jar, 'User-Agent': UA },
-        redirect: 'follow',
+    // La page de login contient toujours le champ passwd ou submitLogin.
+    // Si on les retrouve après le POST, le login a échoué.
+    if (postBody.includes('name="passwd"') || postBody.includes('submitLogin')) {
+      return res.status(502).json({
+        error: 'Connexion au back-office PrestaShop refusée. Vérifier les identifiants PRESTASHOP_ADMIN_EMAIL / _PASSWORD dans Vercel et que le compte n\'a pas de double authentification (2FA).',
       });
-      jar = mergeJar(jar, extractCookies(dashRes.headers));
-      await dashRes.text(); // vider le body
     }
 
     // ── Étape 3 : fiche commande → URL de la facture ─────────────────────────
