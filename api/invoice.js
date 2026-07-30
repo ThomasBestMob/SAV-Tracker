@@ -118,8 +118,6 @@ export default async function handler(req, res) {
       const dashBody = await dashRes.text();
       log.push({ step: 'dashboard', status: dashRes.status, url: dashRes.url, hasPasswd: dashBody.includes('name="passwd"'), bodySnippet: dashBody.slice(0, 300) });
 
-      if (debug) return res.status(200).json({ debug: log });
-
       if (dashBody.includes('name="passwd"') || dashBody.includes('id="login_form"')) {
         return res.status(502).json({
           error: 'Connexion au back-office PrestaShop refusée. Vérifier PRESTASHOP_ADMIN_EMAIL / _PASSWORD dans Vercel et que le compte n\'a pas de double authentification (2FA).',
