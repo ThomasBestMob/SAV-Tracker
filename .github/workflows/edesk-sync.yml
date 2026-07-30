@@ -25,6 +25,11 @@ on:
         required: false
         default: ""
         type: string
+      ticket_lookback_days:
+        description: "Profondeur d'historique tickets en jours (défaut 14 ; 180 pour alimenter l'analyse produit)"
+        required: false
+        default: ""
+        type: string
 
 jobs:
   sync:
@@ -49,6 +54,7 @@ jobs:
           DRY_RUN: ${{ github.event.inputs.dry_run || 'false' }}
           FULL_SYNC: ${{ github.event.inputs.full_sync || 'false' }}
           TICKET_SYNC_LIMIT: ${{ github.event.inputs.ticket_limit }}
+          TICKET_LOOKBACK_DAYS: ${{ github.event.inputs.ticket_lookback_days || '14' }}
         run: node sync/edesk_sync.js
 
       - name: Notify on failure
