@@ -73,7 +73,7 @@ function Row({ t }) {
   return (
     <div className="border-b border-ink/8 hover:bg-warm/30">
       <div className="px-3 py-2 flex items-baseline gap-3 cursor-pointer" onClick={() => setOpen((v) => !v)}>
-        <span className={`${chip} ${SLA_STYLES[t.sla.level]} w-[132px] text-center shrink-0`}>{t.sla.label}</span>
+        <span className={`${chip} ${SLA_STYLES[t.sla.level]} min-w-[120px] text-center shrink-0`}>{t.sla.label}</span>
         <span className={`${chip} ${ACTION_TONES[t.actionMeta?.tone] || ACTION_TONES.neutral} w-[152px] text-center shrink-0`}>
           {t.actionMeta?.label}
         </span>
