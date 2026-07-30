@@ -67,13 +67,17 @@ export default async function handler(req, res) {
     const loginHtml = await getRes.text();
     log.push({ step: 'GET login', status: getRes.status, url: getRes.url, cookies: jar.length });
 
-    const tokenMatch = loginHtml.match(/name=["']token["'][^>]*value=["']([^"']+)["']/i)
-                    || loginHtml.match(/value=["']([^"']+)["'][^>]*name=["']token["']/i);
-    const token = tokenMatch?.[1] ?? '';
-    log.push({ step: 'token', found: !!token, length: token.length });
+    // Le token PS est dans l'URL de la page de login (pas dans un champ caché) :
+    // ?controller=AdminLogin&token=XXXX — il faut poster vers cette même URL.
+    const urlTokenMatch = getRes.url.match(/[?&]token=([^&]+)/);
+    const token = urlTokenMatch?.[1] ?? '';
+    const loginPostUrl = token
+      ? `${ADMIN_URL}/index.php?controller=AdminLogin&token=${token}`
+      : `${ADMIN_URL}/index.php`;
+    log.push({ step: 'token', found: !!token, length: token.length, postUrl: loginPostUrl });
 
     // ── Étape 2 : POST des identifiants ──────────────────────────────────────
-    const postRes = await fetch(`${ADMIN_URL}/index.php`, {
+    const postRes = await fetch(loginPostUrl, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/x-www-form-urlencoded',
