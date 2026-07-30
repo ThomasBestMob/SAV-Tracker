@@ -127,11 +127,27 @@ export default async function handler(req, res) {
 
     // ── Étape 3 : fiche commande → URL de la facture ─────────────────────────
     const orderUrl = `${ADMIN_URL}/index.php?controller=AdminOrders&id_order=${orderId}&vieworder`;
-    const orderRes = await fetch(orderUrl, {
+    // redirect: 'manual' pour capturer les cookies de chaque saut.
+    // PS 1.7+ redirige de l'ancienne URL (?controller=AdminOrders) vers la nouvelle
+    // (/sell/orders/{id}/view) et peut poser des cookies pendant ce saut.
+    let orderRes = await fetch(orderUrl, {
       headers: { 'Cookie': jar, 'User-Agent': UA, 'Referer': `${ADMIN_URL}/index.php` },
-      redirect: 'follow',
+      redirect: 'manual',
     });
     jar = mergeJar(jar, extractCookies(orderRes.headers));
+
+    // Suivre les redirections manuellement
+    let hops = 0;
+    while ((orderRes.status === 301 || orderRes.status === 302 || orderRes.status === 307 || orderRes.status === 308) && hops < 5) {
+      const loc = orderRes.headers.get('location') || '';
+      const next = loc.startsWith('http') ? loc : `${ADMIN_URL}${loc.startsWith('/') ? '' : '/'}${loc}`;
+      orderRes = await fetch(next, {
+        headers: { 'Cookie': jar, 'User-Agent': UA },
+        redirect: 'manual',
+      });
+      jar = mergeJar(jar, extractCookies(orderRes.headers));
+      hops++;
+    }
     const orderHtml = await orderRes.text();
 
     // Le lien peut avoir des entités HTML (&amp;)
