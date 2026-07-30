@@ -25,6 +25,7 @@ export default function Products() {
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
+  const [detailError, setDetailError] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
   function load() {
@@ -96,6 +97,7 @@ export default function Products() {
     setSelected(ref);
     setDetailLoading(true);
     setDetail(null);
+    setDetailError(null);
     let q = supabase
       .from('sav_ticket_enriched')
       .select('id,subject,category,created_at,channel_key,first_message_body,edesk_order_reference,product_issues')
@@ -105,7 +107,8 @@ export default function Products() {
       .limit(100);
     if (issue !== 'all') q = q.contains('product_issues', [issue]);
     const { data, error } = await q;
-    if (!error && data) setDetail(data);
+    if (error) setDetailError(error.message);
+    else setDetail(data || []);
     setDetailLoading(false);
   }
 
@@ -232,7 +235,9 @@ export default function Products() {
               <button onClick={() => setSelected(null)} className="text-2xl text-muted hover:text-ink leading-none">×</button>
             </div>
 
-            {detailLoading ? <Loading /> : (
+            {detailLoading ? <Loading /> : detailError ? (
+              <div className="text-xs text-urgent border border-urgent/30 bg-urgent/5 p-3">{detailError}</div>
+            ) : (
               <div className="space-y-2">
                 {(detail || []).map((t) => (
                   <div key={t.id} className="border border-ink/10 p-3">
