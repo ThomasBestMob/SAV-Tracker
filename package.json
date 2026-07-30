@@ -15,11 +15,6 @@
     "recharts": "^2.12.7",
     "lucide-react": "^0.460.0"
   },
-  "//optionalDependencies": "Uniquement pour api/invoice.js (PDF de facture). En optionnel volontairement : si la resolution echoue (version de Chromium indisponible), le build du site ne doit pas tomber pour autant — seule la route facture rend une erreur claire.",
-  "optionalDependencies": {
-    "@sparticuz/chromium": "^131.0.0",
-    "playwright-core": "^1.49.0"
-  },
   "devDependencies": {
     "@vitejs/plugin-react": "^4.3.1",
     "autoprefixer": "^10.4.19",

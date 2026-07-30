@@ -1,111 +1,166 @@
 // GET /api/invoice?order_id=<id_order PrestaShop>
 //
-// Récupère le PDF de facture d'une commande PrestaShop.
+// Télécharge le PDF de facture d'une commande PrestaShop en pilotant le BO
+// via HTTP pur (fetch), sans navigateur headless.
 //
 // Pourquoi pas le webservice : la ressource `order_invoices` de l'API REST
-// n'expose que les métadonnées de facture (numéro, date, montants) — pas le
-// fichier. Le PDF n'est généré que par le contrôleur AdminPdf du back-office,
-// qui exige une session employé authentifiée. On pilote donc un navigateur
-// headless qui se connecte au BO et télécharge la facture.
-//
-// Ce chemin est volontairement isolé ici : il est plus fragile que le reste du
-// produit (dépend du thème/version du BO, casse à chaque changement de login),
-// et tout le reste du dashboard fonctionne sans lui.
+// n'expose que les métadonnées (numéro, date, montants) — pas le fichier. Le
+// PDF n'est généré que par le contrôleur AdminPdf, qui exige une session BO.
+// On simule la séquence login → fiche commande → lien PDF exactement comme le
+// ferait un navigateur, mais avec fetch() : plus léger, compatible Vercel.
 //
 // Variables d'environnement requises :
-//   PRESTASHOP_ADMIN_URL    ex: https://bestmobilier.com/admin_xxxxx
-//   PRESTASHOP_ADMIN_EMAIL  compte employé dédié, en lecture seule si possible
+//   PRESTASHOP_ADMIN_URL      ex: https://bestmobilier.com/admin_xxxxx
+//   PRESTASHOP_ADMIN_EMAIL    compte employé dédié, sans double authentification
 //   PRESTASHOP_ADMIN_PASSWORD
 
-const ADMIN_URL = process.env.PRESTASHOP_ADMIN_URL;
-const ADMIN_EMAIL = process.env.PRESTASHOP_ADMIN_EMAIL;
+const ADMIN_URL    = (process.env.PRESTASHOP_ADMIN_URL || '').replace(/\/$/, '');
+const ADMIN_EMAIL  = process.env.PRESTASHOP_ADMIN_EMAIL;
 const ADMIN_PASSWORD = process.env.PRESTASHOP_ADMIN_PASSWORD;
 
-// ESM et non `module.exports` : package.json déclare "type": "module", donc ce
-// fichier est chargé comme module ES. Avec module.exports, la fonction échouait
-// dès le chargement ("module is not defined in ES module scope") — d'où une
-// erreur générique côté front au lieu du message explicite prévu plus bas.
+const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36';
+
+// PrestaShop renvoie plusieurs Set-Cookie séparés. fetch() les concatène avec
+// ", " dans headers.get() — ce qui casse le parsing si une valeur contient
+// une virgule. On utilise getSetCookie() (Node 20 / WhatWG Fetch) qui renvoie
+// un tableau propre, ou on fallback sur le split manuel.
+function extractCookies(headers) {
+  const raw = typeof headers.getSetCookie === 'function'
+    ? headers.getSetCookie()
+    : (headers.get('set-cookie') || '').split(/,(?=\s*\w+=)/);
+  return raw.map(c => c.split(';')[0].trim()).filter(Boolean).join('; ');
+}
+
+function mergeJar(existing, incoming) {
+  if (!incoming) return existing;
+  const jar = Object.fromEntries(
+    existing.split(';').map(p => p.trim().split('=')).filter(p => p.length >= 2).map(([k, ...v]) => [k.trim(), v.join('=')])
+  );
+  incoming.split(';').map(p => p.trim().split('=')).filter(p => p.length >= 2).forEach(([k, ...v]) => {
+    jar[k.trim()] = v.join('=');
+  });
+  return Object.entries(jar).map(([k, v]) => `${k}=${v}`).join('; ');
+}
+
 export default async function handler(req, res) {
   const orderId = String(req.query.order_id || '').trim();
   if (!/^\d+$/.test(orderId)) {
-    return res.status(400).json({ error: 'order_id (id commande PrestaShop) requis.' });
+    return res.status(400).json({ error: 'order_id (identifiant numérique PrestaShop) requis.' });
   }
 
   if (!ADMIN_URL || !ADMIN_EMAIL || !ADMIN_PASSWORD) {
     return res.status(501).json({
-      error:
-        "Téléchargement facture non configuré : renseigner PRESTASHOP_ADMIN_URL, PRESTASHOP_ADMIN_EMAIL et PRESTASHOP_ADMIN_PASSWORD (compte employé dédié).",
+      error: 'Téléchargement facture non configuré : renseigner PRESTASHOP_ADMIN_URL, PRESTASHOP_ADMIN_EMAIL et PRESTASHOP_ADMIN_PASSWORD dans les variables Vercel (compte employé dédié, sans 2FA).',
     });
   }
 
-  let browser;
   try {
-    // Import paresseux : la dépendance est lourde et n'est utile que sur cette
-    // route — les autres endpoints ne doivent pas la payer au démarrage.
-    // En serverless (Vercel) le runtime n'embarque pas de navigateur : on
-    // utilise le binaire fourni par @sparticuz/chromium. En local, Playwright
-    // retombe sur le Chromium installé par `npx playwright install`.
-    const { chromium } = await import('playwright-core');
-    const sparticuz = await import('@sparticuz/chromium').then((m) => m.default).catch(() => null);
-    browser = await chromium.launch(
-      sparticuz
-        ? { args: sparticuz.args, executablePath: await sparticuz.executablePath(), headless: true }
-        : { headless: true }
-    );
-    const context = await browser.newContext({ acceptDownloads: true });
-    const page = await context.newPage();
+    // ── Étape 1 : page de login pour récupérer le cookie de session ──────────
+    const getRes = await fetch(`${ADMIN_URL}/index.php`, {
+      headers: { 'User-Agent': UA },
+      redirect: 'follow',
+    });
+    let jar = extractCookies(getRes.headers);
+    const loginHtml = await getRes.text();
 
-    await page.goto(`${ADMIN_URL}/index.php`, { waitUntil: 'domcontentloaded', timeout: 30000 });
-    await page.fill('input[name="email"]', ADMIN_EMAIL);
-    await page.fill('input[name="passwd"]', ADMIN_PASSWORD);
-    await Promise.all([
-      page.waitForNavigation({ waitUntil: 'domcontentloaded', timeout: 30000 }),
-      page.click('button[name="submitLogin"]'),
-    ]);
+    // Certaines versions de PS injectent un token CSRF dans le formulaire.
+    const tokenMatch = loginHtml.match(/name="token"\s[^>]*value="([^"]+)"/i)
+                    || loginHtml.match(/name="_token"\s[^>]*value="([^"]+)"/i);
+    const token = tokenMatch?.[1] ?? '';
 
-    if (await page.locator('input[name="passwd"]').count()) {
-      return res.status(502).json({ error: 'Connexion au back-office PrestaShop refusée (identifiants ou double authentification).' });
-    }
-
-    // Le token du contrôleur AdminPdf est propre à la session : on le récupère
-    // depuis la fiche commande plutôt que de le coder en dur.
-    await page.goto(`${ADMIN_URL}/index.php?controller=AdminOrders&id_order=${orderId}&vieworder`, {
-      waitUntil: 'domcontentloaded',
-      timeout: 30000,
+    // ── Étape 2 : POST des identifiants ───────────────────────────────────────
+    const postRes = await fetch(`${ADMIN_URL}/index.php`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/x-www-form-urlencoded',
+        'Cookie': jar,
+        'User-Agent': UA,
+        'Referer': `${ADMIN_URL}/index.php`,
+      },
+      body: new URLSearchParams({
+        email: ADMIN_EMAIL,
+        passwd: ADMIN_PASSWORD,
+        submitLogin: '1',
+        token,
+      }).toString(),
+      redirect: 'manual',
     });
 
-    const invoiceHref = await page
-      .locator('a[href*="generateInvoicePDF"]')
-      .first()
-      .getAttribute('href')
-      .catch(() => null);
+    jar = mergeJar(jar, extractCookies(postRes.headers));
 
-    if (!invoiceHref) {
-      return res.status(404).json({ error: `Aucune facture disponible pour la commande ${orderId} (pas encore facturée ?).` });
+    // PS redirige vers le dashboard après un login réussi (302 → Location).
+    // S'il renvoie 200 c'est que la page de login s'est réaffichée : refus.
+    const location = postRes.headers.get('location') || '';
+    if (!location) {
+      // Vérifier si la réponse contient encore le formulaire
+      const body = await postRes.text().catch(() => '');
+      if (body.includes('submitLogin') || body.includes('name="passwd"')) {
+        return res.status(502).json({
+          error: 'Connexion au back-office PrestaShop refusée — vérifier les identifiants et que le compte n\'a pas de double authentification.',
+        });
+      }
     }
 
-    const cookies = await context.cookies();
-    const cookieHeader = cookies.map((c) => `${c.name}=${c.value}`).join('; ');
-    const pdfUrl = invoiceHref.startsWith('http') ? invoiceHref : `${ADMIN_URL}/${invoiceHref.replace(/^\//, '')}`;
+    // Suivre la redirection si nécessaire
+    if (location) {
+      const redir = location.startsWith('http') ? location : `${ADMIN_URL}${location.startsWith('/') ? '' : '/'}${location}`;
+      const dashRes = await fetch(redir, {
+        headers: { 'Cookie': jar, 'User-Agent': UA },
+        redirect: 'follow',
+      });
+      jar = mergeJar(jar, extractCookies(dashRes.headers));
+      await dashRes.text(); // vider le body
+    }
 
-    const pdfRes = await fetch(pdfUrl, { headers: { Cookie: cookieHeader } });
+    // ── Étape 3 : fiche commande → URL de la facture ─────────────────────────
+    const orderUrl = `${ADMIN_URL}/index.php?controller=AdminOrders&id_order=${orderId}&vieworder`;
+    const orderRes = await fetch(orderUrl, {
+      headers: { 'Cookie': jar, 'User-Agent': UA, 'Referer': `${ADMIN_URL}/index.php` },
+      redirect: 'follow',
+    });
+    jar = mergeJar(jar, extractCookies(orderRes.headers));
+    const orderHtml = await orderRes.text();
+
+    // Le lien peut avoir des entités HTML (&amp;)
+    const invoiceMatch = orderHtml.match(/href="([^"]*generateInvoicePDF[^"]*)"/i);
+    if (!invoiceMatch) {
+      // Détecter si on a été renvoyé au login (session perdue)
+      if (orderHtml.includes('submitLogin') || orderHtml.includes('name="passwd"')) {
+        return res.status(502).json({ error: 'Session BO expirée avant d\'atteindre la fiche commande.' });
+      }
+      return res.status(404).json({
+        error: `Aucune facture disponible pour la commande PrestaShop #${orderId} — commande non facturée ou identifiant incorrect.`,
+      });
+    }
+
+    let invoiceHref = invoiceMatch[1].replace(/&amp;/g, '&');
+    if (!invoiceHref.startsWith('http')) {
+      invoiceHref = `${ADMIN_URL}/${invoiceHref.replace(/^\//, '')}`;
+    }
+
+    // ── Étape 4 : téléchargement du PDF ──────────────────────────────────────
+    const pdfRes = await fetch(invoiceHref, {
+      headers: { 'Cookie': jar, 'User-Agent': UA },
+      redirect: 'follow',
+    });
+
     if (!pdfRes.ok) {
       return res.status(502).json({ error: `PrestaShop a répondu ${pdfRes.status} sur la génération du PDF.` });
     }
 
     const buffer = Buffer.from(await pdfRes.arrayBuffer());
-    if (buffer.subarray(0, 4).toString() !== '%PDF') {
-      // Session expirée ou redirection vers le login : mieux vaut une erreur
-      // claire qu'un fichier corrompu envoyé au client final.
-      return res.status(502).json({ error: 'La réponse PrestaShop n\'est pas un PDF (session expirée ?).' });
+    if (buffer.subarray(0, 4).toString('ascii') !== '%PDF') {
+      const preview = buffer.subarray(0, 120).toString('utf8').replace(/\s+/g, ' ');
+      return res.status(502).json({
+        error: `La réponse n'est pas un PDF (session expirée ou PDF non généré). Début : ${preview}`,
+      });
     }
 
     res.setHeader('Content-Type', 'application/pdf');
     res.setHeader('Content-Disposition', `attachment; filename="facture_${orderId}.pdf"`);
     return res.status(200).send(buffer);
+
   } catch (e) {
-    return res.status(500).json({ error: `Échec de récupération de la facture : ${e.message}` });
-  } finally {
-    if (browser) await browser.close().catch(() => {});
+    return res.status(500).json({ error: `Erreur récupération facture : ${e.message}` });
   }
-};
+}
