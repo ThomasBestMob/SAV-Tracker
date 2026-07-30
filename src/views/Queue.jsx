@@ -1,13 +1,15 @@
 import { useState, useEffect, useMemo } from 'react';
 import { supabase } from '../supabaseClient';
-import { Card, SectionTitle, Stat, Loading, Empty, CategoryPill } from '../components/Atoms';
-import { triage, bySlaUrgency, ACTIONS, channelLabel, draftReply, trackingUrl } from '../lib/triage';
+import { Loading, Empty, categoryLabel } from '../components/Atoms';
+import { triage, bySlaUrgency, ACTIONS, BUCKETS, channelLabel, draftReply, trackingUrl } from '../lib/triage';
+import { productIssueLabel } from '../lib/productIssues';
 
 const SLA_STYLES = {
   breached: 'bg-urgent/10 text-urgent border-urgent/40',
   critical: 'bg-orange-100 text-orange-700 border-orange-300',
   soon: 'bg-amber-50 text-amber-700 border-amber-200',
   ok: 'bg-ink/5 text-muted border-ink/10',
+  waiting: 'bg-ink/5 text-muted border-ink/10',
   unknown: 'bg-ink/5 text-muted border-ink/10',
 };
 
@@ -18,28 +20,17 @@ const ACTION_TONES = {
   neutral: 'text-muted border-ink/15',
 };
 
-function SlaBadge({ sla }) {
-  return (
-    <span className={`inline-block px-2 py-0.5 text-[10px] uppercase tracking-wider font-medium border rounded-sm ${SLA_STYLES[sla.level]}`}>
-      {sla.label}
-    </span>
-  );
-}
+const chip = 'inline-block px-1.5 py-0.5 text-[10px] uppercase tracking-wider font-medium border rounded-sm whitespace-nowrap';
 
-function CopyButton({ text, label = 'Copier la réponse' }) {
+function CopyButton({ text }) {
   const [done, setDone] = useState(false);
   if (!text) return null;
   return (
     <button
-      onClick={() => {
-        navigator.clipboard.writeText(text).then(() => {
-          setDone(true);
-          setTimeout(() => setDone(false), 2000);
-        });
-      }}
-      className="text-[10px] uppercase tracking-wider px-2 py-1 border border-accent text-accent hover:bg-accent hover:text-white transition-colors"
+      onClick={() => navigator.clipboard.writeText(text).then(() => { setDone(true); setTimeout(() => setDone(false), 2000); })}
+      className="text-[10px] uppercase tracking-wider px-2 py-0.5 border border-accent text-accent hover:bg-accent hover:text-white transition-colors"
     >
-      {done ? '✓ Copié' : label}
+      {done ? '✓ Copié' : 'Copier'}
     </button>
   );
 }
@@ -64,47 +55,40 @@ async function downloadInvoice(psOrderId, ref) {
   }
 }
 
-function TicketCard({ t }) {
+function Row({ t }) {
   const [open, setOpen] = useState(false);
   const draft = draftReply(t);
   const track = trackingUrl(t);
-  const tone = ACTION_TONES[t.actionMeta?.tone] || ACTION_TONES.neutral;
 
   return (
-    <Card className="p-4">
-      <div className="flex items-start justify-between gap-4">
+    <div className="border-b border-ink/8 hover:bg-warm/30">
+      <div className="px-3 py-2 flex items-baseline gap-3 cursor-pointer" onClick={() => setOpen((v) => !v)}>
+        <span className={`${chip} ${SLA_STYLES[t.sla.level]} w-[132px] text-center shrink-0`}>{t.sla.label}</span>
+        <span className={`${chip} ${ACTION_TONES[t.actionMeta?.tone] || ACTION_TONES.neutral} w-[152px] text-center shrink-0`}>
+          {t.actionMeta?.label}
+        </span>
+
         <div className="flex-1 min-w-0">
-          <div className="flex items-center gap-2 mb-1.5 flex-wrap">
-            <SlaBadge sla={t.sla} />
-            <span className={`inline-block px-2 py-0.5 text-[10px] uppercase tracking-wider font-medium border rounded-sm ${tone}`}>
-              {t.actionMeta?.label}
-            </span>
-            <CategoryPill category={t.category} />
-            <span className="text-[10px] uppercase tracking-wider text-muted">{channelLabel(t.channel_key)}</span>
-          </div>
-
-          <div className="font-medium text-sm">{t.subject || '(sans sujet)'}</div>
-
-          <div className="text-xs text-muted mt-1 flex flex-wrap gap-x-3 gap-y-0.5">
-            <span>#{t.id}</span>
-            {t.edesk_order_reference && <span>Cmd {t.edesk_order_reference}</span>}
+          <div className="text-sm truncate">{t.subject || '(sans sujet)'}</div>
+          <div className="text-[11px] text-muted flex flex-wrap gap-x-2.5 mt-0.5">
+            <span>{channelLabel(t.channel_key)}</span>
+            <span>{categoryLabel(t.category)}</span>
+            {t.product_issues?.length > 0 && (
+              <span className="text-accent">{t.product_issues.map(productIssueLabel).join(', ')}</span>
+            )}
+            {t.edesk_order_reference && <span className="font-mono">{t.edesk_order_reference}</span>}
             {t.order_value ? <span>{Math.round(t.order_value)} €</span> : null}
-            {t.product_refs?.length ? <span className="font-mono">{t.product_refs.join(' · ')}</span> : null}
-            {t.message_count ? <span>{t.message_count} msg</span> : null}
+            {t.reasons.length > 0 && <span className="italic">{t.reasons[0]}</span>}
           </div>
-
-          {t.reasons.length > 0 && (
-            <div className="text-[11px] text-muted mt-1.5">{t.reasons.join(' — ')}</div>
-          )}
         </div>
 
-        <div className="flex flex-col items-end gap-2 shrink-0">
+        <div className="flex items-center gap-1.5 shrink-0">
           {t.action === 'envoyer_facture' && (
             <button
-              onClick={() => downloadInvoice(t.ps_order_id, t.edesk_order_reference)}
-              className="text-[10px] uppercase tracking-wider px-2 py-1 border border-accent text-accent hover:bg-accent hover:text-white transition-colors whitespace-nowrap"
+              onClick={(e) => { e.stopPropagation(); downloadInvoice(t.ps_order_id, t.edesk_order_reference); }}
+              className={`${chip} border-accent text-accent hover:bg-accent hover:text-white transition-colors`}
             >
-              Facture PDF
+              Facture
             </button>
           )}
           {track && (
@@ -112,52 +96,66 @@ function TicketCard({ t }) {
               href={track}
               target="_blank"
               rel="noreferrer"
-              className="text-[10px] uppercase tracking-wider px-2 py-1 border border-ink/20 text-muted hover:border-accent hover:text-accent transition-colors whitespace-nowrap"
+              onClick={(e) => e.stopPropagation()}
+              className={`${chip} border-ink/20 text-muted hover:border-accent hover:text-accent`}
             >
-              Suivi colis
+              Suivi
             </a>
           )}
-          <button onClick={() => setOpen((v) => !v)} className="text-[10px] uppercase tracking-wider text-accent hover:underline whitespace-nowrap">
-            {open ? 'Réduire' : 'Ouvrir'}
-          </button>
+          <span className="text-muted text-xs w-3 text-center">{open ? '−' : '+'}</span>
         </div>
       </div>
 
       {open && (
-        <div className="mt-4 pt-4 border-t border-ink/10 grid md:grid-cols-2 gap-4">
+        <div className="px-3 pb-3 grid md:grid-cols-2 gap-3">
           <div>
-            <div className="text-[10px] uppercase tracking-widest text-muted mb-1.5">Demande du client</div>
-            <div className="text-xs whitespace-pre-wrap bg-ink/[0.03] border border-ink/10 p-3 max-h-72 overflow-y-auto">
-              {t.first_message_body || <span className="italic text-muted">Message non synchronisé.</span>}
+            <div className="text-[10px] uppercase tracking-widest text-muted mb-1">
+              Demande du client {t.first_message_author ? `— ${t.first_message_author}` : ''}
+            </div>
+            <div className="text-xs whitespace-pre-wrap bg-ink/[0.03] border border-ink/10 p-2.5 max-h-64 overflow-y-auto">
+              {t.first_message_body || (
+                <span className="italic text-muted">
+                  Message non synchronisé — ce ticket date d'avant la récupération des messages. Un sync complet le remplira.
+                </span>
+              )}
             </div>
           </div>
           <div>
-            <div className="text-[10px] uppercase tracking-widest text-muted mb-1.5 flex items-center justify-between">
+            <div className="text-[10px] uppercase tracking-widest text-muted mb-1 flex items-center justify-between gap-2">
               <span>Réponse suggérée</span>
               <CopyButton text={draft} />
             </div>
             {draft ? (
-              <div className="text-xs whitespace-pre-wrap bg-accent/[0.04] border border-accent/20 p-3">{draft}</div>
+              <div className="text-xs whitespace-pre-wrap bg-accent/[0.04] border border-accent/20 p-2.5">{draft}</div>
             ) : (
-              <div className="text-xs italic text-muted p-3 border border-dashed border-ink/15">
-                Pas de réponse type pour cette action — à traiter manuellement dans eDesk.
+              <div className="text-xs italic text-muted p-2.5 border border-dashed border-ink/15">
+                Pas de réponse type pour cette action — à traiter dans eDesk.
               </div>
             )}
             {t.product_names?.length > 0 && (
-              <div className="mt-3 text-[11px] text-muted">
-                <span className="uppercase tracking-widest">Produits</span> — {t.product_names.join(', ')}
-              </div>
+              <div className="mt-2 text-[11px] text-muted">{t.product_names.filter(Boolean).join(', ')}</div>
             )}
           </div>
         </div>
       )}
-    </Card>
+    </div>
+  );
+}
+
+function Kpi({ label, value, tone }) {
+  const color = tone === 'urgent' ? 'text-urgent' : tone === 'accent' ? 'text-accent' : 'text-ink';
+  return (
+    <div className="px-4 py-2 border-l-2 border-ink/10 first:border-l-0 first:pl-0">
+      <div className="text-[10px] uppercase tracking-widest text-muted">{label}</div>
+      <div className={`num text-2xl font-medium leading-tight ${color}`}>{value}</div>
+    </div>
   );
 }
 
 export default function Queue({ selectedChannel, period }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [bucket, setBucket] = useState('a_traiter');
   const [actionFilter, setActionFilter] = useState('all');
 
   useEffect(() => {
@@ -166,9 +164,9 @@ export default function Queue({ selectedChannel, period }) {
     let q = supabase
       .from('sav_ticket_enriched')
       .select('*')
-      .neq('status', 'closed')
+      .eq('is_open', true)
       .gte('created_at', since)
-      .limit(1000);
+      .limit(2000);
     if (selectedChannel !== 'all') q = q.eq('channel_key', selectedChannel);
 
     q.then(({ data, error }) => {
@@ -179,67 +177,91 @@ export default function Queue({ selectedChannel, period }) {
 
   const triaged = useMemo(() => rows.map((r) => triage(r)).sort(bySlaUrgency), [rows]);
 
-  const counts = useMemo(() => {
-    const c = { breached: 0, critical: 0, automatable: 0 };
-    triaged.forEach((t) => {
-      if (t.sla.level === 'breached') c.breached += 1;
-      if (t.sla.level === 'critical') c.critical += 1;
-      if (t.actionMeta?.automatable) c.automatable += 1;
-    });
+  const buckets = useMemo(() => {
+    const c = { a_traiter: 0, en_attente_client: 0, notification: 0 };
+    triaged.forEach((t) => { c[t.bucket] += 1; });
     return c;
   }, [triaged]);
 
+  const inBucket = useMemo(() => triaged.filter((t) => t.bucket === bucket), [triaged, bucket]);
+
+  const kpis = useMemo(() => {
+    const breached = inBucket.filter((t) => t.sla.level === 'breached').length;
+    const critical = inBucket.filter((t) => t.sla.level === 'critical').length;
+    const outillees = inBucket.filter((t) => t.actionMeta?.automatable).length;
+    return { breached, critical, outillees };
+  }, [inBucket]);
+
   const byAction = useMemo(() => {
     const map = {};
-    triaged.forEach((t) => { map[t.action] = (map[t.action] || 0) + 1; });
+    inBucket.forEach((t) => { map[t.action] = (map[t.action] || 0) + 1; });
     return Object.entries(map).sort((a, b) => b[1] - a[1]);
-  }, [triaged]);
+  }, [inBucket]);
 
   const filtered = useMemo(
-    () => (actionFilter === 'all' ? triaged : triaged.filter((t) => t.action === actionFilter)),
-    [triaged, actionFilter]
+    () => (actionFilter === 'all' ? inBucket : inBucket.filter((t) => t.action === actionFilter)),
+    [inBucket, actionFilter]
   );
 
   return (
-    <div className="space-y-10">
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-        <Stat label="Hors délai" value={counts.breached} urgent={counts.breached > 0} sub="SLA canal dépassé" />
-        <Stat label="Sous 4 h" value={counts.critical} accent sub="à traiter maintenant" />
-        <Stat label="Réponse outillée" value={counts.automatable} sub="matériel déjà prêt" />
-        <Stat label="File ouverte" value={triaged.length} sub={`${period} derniers jours`} />
-      </div>
-
-      <div>
-        <SectionTitle
-          kicker="Ma journée"
-          title="File de traitement"
-          byline="triée par échéance de réponse"
-        />
-
-        <div className="flex gap-2 mb-5 flex-wrap text-xs">
+    <div className="space-y-4">
+      {/* Onglets d'état : c'est le premier tri que fait l'agent — de quoi suis-je
+          responsable maintenant — avant tout autre filtre. */}
+      <div className="flex items-center gap-1 border-b border-ink/10">
+        {Object.entries(BUCKETS).map(([key, def]) => (
           <button
-            onClick={() => setActionFilter('all')}
-            className={`px-3 py-1.5 border uppercase tracking-wider ${actionFilter === 'all' ? 'border-accent text-accent' : 'border-ink/20 text-muted'}`}
+            key={key}
+            onClick={() => { setBucket(key); setActionFilter('all'); }}
+            title={def.hint}
+            className={`px-4 py-2 text-xs uppercase tracking-widest font-medium border-b-2 -mb-px transition-colors ${
+              bucket === key ? 'border-accent text-ink' : 'border-transparent text-muted hover:text-ink'
+            }`}
           >
-            Tout ({triaged.length})
+            {def.label} <span className="num ml-1">{buckets[key]}</span>
           </button>
-          {byAction.map(([action, n]) => (
-            <button
-              key={action}
-              onClick={() => setActionFilter(action)}
-              className={`px-3 py-1.5 border uppercase tracking-wider ${actionFilter === action ? 'border-accent text-accent' : 'border-ink/20 text-muted'}`}
-            >
-              {ACTIONS[action]?.label} ({n})
-            </button>
-          ))}
-        </div>
-
-        {loading ? <Loading /> : filtered.length === 0 ? <Empty message="Rien à traiter — file vide." /> : (
-          <div className="space-y-2">
-            {filtered.slice(0, 150).map((t) => <TicketCard key={t.id} t={t} />)}
-          </div>
-        )}
+        ))}
       </div>
+
+      <div className="flex items-center justify-between flex-wrap gap-4">
+        <div className="flex">
+          <Kpi label="Hors délai" value={kpis.breached} tone={kpis.breached > 0 ? 'urgent' : undefined} />
+          <Kpi label="Sous 4 h" value={kpis.critical} tone="accent" />
+          <Kpi label="Réponse outillée" value={kpis.outillees} />
+          <Kpi label="Total" value={inBucket.length} />
+        </div>
+        <p className="text-[11px] text-muted max-w-sm">{BUCKETS[bucket].hint} — trié par échéance de réponse.</p>
+      </div>
+
+      <div className="flex gap-1.5 flex-wrap">
+        <button
+          onClick={() => setActionFilter('all')}
+          className={`px-2.5 py-1 text-[11px] border uppercase tracking-wider ${actionFilter === 'all' ? 'border-accent text-accent' : 'border-ink/20 text-muted'}`}
+        >
+          Tout
+        </button>
+        {byAction.map(([action, n]) => (
+          <button
+            key={action}
+            onClick={() => setActionFilter(action)}
+            className={`px-2.5 py-1 text-[11px] border uppercase tracking-wider ${actionFilter === action ? 'border-accent text-accent' : 'border-ink/20 text-muted'}`}
+          >
+            {ACTIONS[action]?.label} <span className="num">{n}</span>
+          </button>
+        ))}
+      </div>
+
+      {loading ? <Loading /> : filtered.length === 0 ? (
+        <Empty message={bucket === 'a_traiter' ? 'Rien à traiter — file vide.' : 'Aucun ticket dans cet état.'} />
+      ) : (
+        <div className="border-t border-ink/8">
+          {filtered.slice(0, 200).map((t) => <Row key={t.id} t={t} />)}
+          {filtered.length > 200 && (
+            <div className="text-[11px] text-muted italic py-3 px-3">
+              {filtered.length - 200} tickets supplémentaires non affichés — affine les filtres.
+            </div>
+          )}
+        </div>
+      )}
     </div>
   );
 }

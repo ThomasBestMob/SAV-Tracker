@@ -24,7 +24,9 @@ export default function Channels({ period }) {
       supabase.from('sav_channel_stats').select('*'),
       supabase
         .from('sav_ticket_enriched')
-        .select('id,channel_key,category,status,created_at,last_message_at,ps_order_id,edesk_order_reference,message_count,order_value,tracking_code,expected_delivery_to')
+        .select('id,channel_key,category,created_at,last_message_at,ps_order_id,edesk_order_reference,message_count,order_value,tracking_code,expected_delivery_to,awaiting_us,is_customer_request')
+        .eq('is_open', true)
+        .eq('is_customer_request', true)
         .gte('created_at', since)
         .limit(5000),
     ]).then(([{ data: s }, { data: t }]) => {
@@ -35,7 +37,10 @@ export default function Channels({ period }) {
   }, [period]);
 
   const rows = useMemo(() => {
-    const open = tickets.filter((t) => t.status !== 'closed').map((t) => triage(t));
+    // Le respect du SLA ne se mesure que sur les tickets dont la main est chez
+    // nous : compter un dépassement sur un ticket en attente de réponse client
+    // nous imputerait un retard qui n'est pas le nôtre.
+    const open = tickets.filter((t) => t.awaiting_us !== false).map((t) => triage(t));
     const byChannel = {};
     open.forEach((t) => {
       const k = t.channel_key || 'autre';
@@ -73,12 +78,12 @@ export default function Channels({ period }) {
   }, [rows]);
 
   return (
-    <div className="space-y-10">
+    <div className="space-y-6">
       <div className="grid grid-cols-2 md:grid-cols-4 gap-6">
-        <Stat label="Respect SLA" value={totals.slaPct != null ? `${totals.slaPct}%` : '—'} accent sub="tickets encore dans les délais" />
+        <Stat label="Respect SLA" value={totals.slaPct != null ? `${totals.slaPct}%` : '—'} accent sub="demandes encore dans les délais" />
         <Stat label="Hors délai" value={totals.breached} urgent={totals.breached > 0} sub="à rattraper" />
         <Stat label="Commandes rattachées" value={totals.linkPct != null ? `${totals.linkPct}%` : '—'} sub="ticket → PrestaShop" />
-        <Stat label="Tickets ouverts" value={totals.open} sub={`${period} derniers jours`} />
+        <Stat label="En attente de nous" value={totals.open} sub={`${period} derniers jours`} />
       </div>
 
       <div>

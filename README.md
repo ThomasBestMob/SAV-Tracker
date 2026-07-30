@@ -147,6 +147,37 @@ matériel disponible (une demande de facture sans commande rattachée n'est pas 
 même tâche qu'une facture prête à envoyer), plus le matériel pour l'exécuter :
 n° de suivi, lien transporteur, réponse pré-rédigée, PDF de facture.
 
+## Les trois états d'un ticket
+
+Une file qui mélange « le client attend ma réponse » et « j'ai répondu, j'attends
+le client » ne peut pas être vidée, donc ne se travaille pas. L'état vient du
+**sens du dernier message** du fil (`last_message_direction`) :
+
+| État | Sens | Compteur SLA |
+|---|---|---|
+| **À traiter** | dernier message du client | oui |
+| **En attente client** | dernier message de nous | non — le retard n'est pas le nôtre |
+| **Notifications** | *premier* message de nous | non |
+
+Le troisième état existe parce qu'eDesk ingère aussi nos propres mails
+transactionnels (« [Best Mobilier] Paiement accepté ») comme des tickets. Un fil
+dont le premier message sort de chez nous n'est pas une demande client.
+
+## Deux axes de classification, pas un
+
+- `category` (src/lib/priority.js) — la **démarche** : facture, livraison,
+  retour… C'est ce dont l'équipe SAV a besoin pour savoir quel geste faire.
+- `product_issues` (src/lib/productIssues.js) — le **défaut produit** : casse,
+  affaissement, couleur vs photo, pièce manquante… C'est ce dont l'équipe offre a
+  besoin, et `category` ne le dit pas : un ticket « retour_remboursement » peut
+  avoir pour cause réelle un affaissement d'assise.
+
+Les deux sont indépendants. Un ticket porte **plusieurs** défauts produit si le
+message en mentionne plusieurs — forcer un motif unique ferait disparaître des
+signaux. La détection lit le sujet **et** le corps du premier message : sur les
+marketplaces le sujet est souvent un libellé générique imposé par la plateforme,
+tout le contenu est dans le corps.
+
 ## Automatisations — règle de sécurité
 
 Les réponses pré-rédigées sont **toujours relues par un agent avant envoi**.

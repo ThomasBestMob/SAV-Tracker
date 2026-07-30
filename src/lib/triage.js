@@ -61,6 +61,13 @@ export function computeSla(ticket, now = Date.now()) {
   const hours = slaHours(ticket.channel_key);
   if (!base) return { hoursLeft: null, level: 'unknown', label: '—', deadline: null };
 
+  // Le compteur SLA ne court que quand la main est chez nous. Sur un ticket où
+  // nous avons répondu en dernier, afficher un dépassement serait faux : c'est
+  // le client qui n'a pas donné suite.
+  if (ticket.awaiting_us === false) {
+    return { hoursLeft: null, level: 'waiting', label: 'En attente client', deadline: null };
+  }
+
   const deadline = new Date(base).getTime() + hours * 3_600_000;
   const hoursLeft = (deadline - now) / 3_600_000;
 
@@ -142,6 +149,23 @@ export function triageReasons(ticket, sla, now = Date.now()) {
   return out;
 }
 
+// ── État du fil ──────────────────────────────────────────────────────
+// Ce qui rend la file utilisable au quotidien : savoir de quoi l'agent est
+// réellement responsable maintenant. Une liste qui mélange "le client attend ma
+// réponse" et "j'ai répondu, j'attends le client" ne peut pas être vidée, donc
+// ne se travaille pas.
+
+export const BUCKETS = {
+  a_traiter: { label: 'À traiter', hint: 'Le client attend notre réponse' },
+  en_attente_client: { label: 'En attente client', hint: 'Nous avons répondu en dernier' },
+  notification: { label: 'Notifications', hint: 'Mails transactionnels envoyés par nous, pas des demandes' },
+};
+
+export function bucketOf(ticket) {
+  if (!ticket.is_customer_request) return 'notification';
+  return ticket.awaiting_us ? 'a_traiter' : 'en_attente_client';
+}
+
 /** Enrichit un ticket de sav_ticket_enriched avec son triage. */
 export function triage(ticket, now = Date.now()) {
   const sla = computeSla(ticket, now);
@@ -151,6 +175,7 @@ export function triage(ticket, now = Date.now()) {
     sla,
     action,
     actionMeta: ACTIONS[action],
+    bucket: bucketOf(ticket),
     reasons: triageReasons(ticket, sla, now),
   };
 }

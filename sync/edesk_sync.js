@@ -20,6 +20,7 @@
  */
 
 import { classifyTicket, computeTicketPriority } from '../src/lib/priority.js';
+import { detectProductIssues } from '../src/lib/productIssues.js';
 
 const EDESK_BASE = 'https://api.edesk.com/v1';
 const EDESK_TOKEN = process.env.EDESK_API_TOKEN || '';
@@ -287,22 +288,40 @@ function extractTicketDetailBody(ticketDetail) {
   return (ticketDetail && typeof ticketDetail.data === 'object' && ticketDetail.data) || ticketDetail || {};
 }
 
-// Corps intégral du premier message du ticket (la plainte initiale du client),
-// via GET /messages/{id} — seul endpoint disponible (pas de liste filtrable
-// par ticket, confirmé par un 404 en prod). On ne va chercher que le premier
-// message (messages_ids[0]) pour limiter le coût en quota API à 1 appel de
-// plus par ticket plutôt que 1 par message.
+// Corps des messages via GET /messages/{id} — seul endpoint disponible (pas de
+// liste filtrable par ticket, confirmé par un 404 en prod). On ne récupère que
+// les deux extrémités du fil : le premier message (la demande initiale) et le
+// dernier (qui dit à qui est la main), pas tout l'historique.
+
+// Sens du fil : qui a écrit le dernier ? C'est la donnée qui rend la file
+// exploitable — un ticket dont le dernier message vient de nous est en attente
+// du client, pas de nous, et n'a rien à faire dans la file du jour.
+// `direction` n'a pas de valeurs documentées, d'où la normalisation défensive,
+// avec repli sur from_consumer_id / from_user qui sont sans ambiguïté.
+function normalizeDirection(body) {
+  const raw = String(pick(body, 'direction', 'type') || '').toLowerCase();
+  if (raw.includes('out') || raw.includes('reply') || raw.includes('sent')) return 'outbound';
+  if (raw.includes('in') || raw.includes('receiv')) return 'inbound';
+  if (pick(body, 'from_consumer_id') != null) return 'inbound';
+  if (pick(body, 'from_user') != null) return 'outbound';
+  return null;
+}
+
+// Sens de messages_ids, déterminé une fois par run sur le premier ticket à
+// plusieurs messages, puis réutilisé : évite un appel API par ticket.
+let _threadOrder = null;
 let _loggedMessageKeysOnce = false;
 function extractMessageBody(messageDetail, id) {
   const body = extractTicketDetailBody(messageDetail);
   if (!_loggedMessageKeysOnce) {
     _loggedMessageKeysOnce = true;
     console.log(`  🔎 diagnostic — clés du message ${id} : ${Object.keys(body || {}).join(', ')}`);
+    console.log(`     direction brute="${pick(body, 'direction', 'type')}" -> normalisée="${normalizeDirection(body)}"`);
   }
   return {
     id: pick(body, 'id') ?? id,
     body: pick(body, 'body', 'content', 'text', 'message'),
-    direction: pick(body, 'direction', 'type'),
+    direction: normalizeDirection(body),
     author_name: pick(body, 'author_name', 'from_name', 'sender_name'),
     created_at: pick(body, 'created_at'),
     raw: body,
@@ -402,9 +421,22 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
   // principale de lenteur / 429 constatés en prod).
   const existingFirstMessages = await sbSelect(
     'sav_tickets',
-    `select=id,first_message_body,first_message_author&first_message_body=not.is.null&limit=20000`
+    `select=id,first_message_body,first_message_author,first_message_at,first_message_direction&first_message_body=not.is.null&limit=20000`
   ).catch(() => []);
-  const firstMessageCache = new Map(existingFirstMessages.map((r) => [String(r.id), r]));
+  // Ramené à la forme de extractMessageBody() : la ligne écrite plus bas lit
+  // .body / .author_name, pas les noms de colonnes.
+  const firstMessageCache = new Map(
+    existingFirstMessages.map((r) => [
+      String(r.id),
+      {
+        body: r.first_message_body,
+        author_name: r.first_message_author,
+        created_at: r.first_message_at,
+        direction: r.first_message_direction,
+        raw: null, // déjà en base, inutile de le réécrire
+      },
+    ])
+  );
 
   const ticketRows = [];
   let sample = null;
@@ -418,15 +450,48 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
 
     let messageCount = 0;
     let firstMessage = firstMessageCache.get(String(id)) || null;
+    let lastMessage = null;
     try {
       const detail = await edeskGetSmart(`/tickets/${id}`);
       const body = extractTicketDetailBody(detail);
       const messagesIds = pick(body, 'messages_ids') || [];
       messageCount = Array.isArray(messagesIds) ? messagesIds.length : 0;
-      if (!firstMessage && messagesIds.length) {
-        await sleep(150);
-        const messageDetail = await edeskGetSmart(`/messages/${messagesIds[0]}`);
-        firstMessage = extractMessageBody(messageDetail, messagesIds[0]);
+
+      if (messageCount === 1) {
+        // Un seul message : les deux extrémités sont le même objet.
+        if (!firstMessage) {
+          await sleep(150);
+          firstMessage = extractMessageBody(await edeskGetSmart(`/messages/${messagesIds[0]}`), messagesIds[0]);
+        }
+        lastMessage = firstMessage;
+      } else if (messageCount > 1) {
+        const headId = messagesIds[0];
+        const tailId = messagesIds[messageCount - 1];
+
+        if (_threadOrder == null || !firstMessage) {
+          // Tant que le sens de messages_ids est inconnu, on récupère les deux
+          // extrémités et on tranche sur created_at : l'ordre du tableau n'est
+          // pas documenté et le supposer ferait passer le dernier message pour
+          // la demande initiale.
+          await sleep(150);
+          const head = extractMessageBody(await edeskGetSmart(`/messages/${headId}`), headId);
+          await sleep(150);
+          const tail = extractMessageBody(await edeskGetSmart(`/messages/${tailId}`), tailId);
+          const headFirst = String(head.created_at || '') <= String(tail.created_at || '');
+          if (_threadOrder == null) {
+            _threadOrder = headFirst ? 'asc' : 'desc';
+            console.log(`  🔎 diagnostic — messages_ids est en ordre ${_threadOrder === 'asc' ? 'chronologique' : 'anti-chronologique'}.`);
+          }
+          firstMessage = firstMessage || (headFirst ? head : tail);
+          lastMessage = headFirst ? tail : head;
+        } else {
+          // Sens connu et demande initiale déjà en base : un seul appel suffit,
+          // pour le dernier message (qui change à chaque échange, donc jamais
+          // mis en cache).
+          const lastId = _threadOrder === 'asc' ? tailId : headId;
+          await sleep(150);
+          lastMessage = extractMessageBody(await edeskGetSmart(`/messages/${lastId}`), lastId);
+        }
       }
     } catch (e) {
       console.warn(`  détail ticket ${id}:`, e.message);
@@ -475,7 +540,16 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
       order_reference: so?.order_reference ?? null,
       first_message_body: firstMessage?.body ?? null,
       first_message_author: firstMessage?.author_name ?? null,
-      first_message_raw: firstMessage?.raw ?? null,
+      // first_message_raw n'est volontairement plus écrit : il servait à
+      // identifier le nom du champ portant le corps du message (c'est `body`,
+      // confirmé en prod). La colonne existe toujours et garde ses valeurs —
+      // une colonne omise n'est pas touchée par l'upsert.
+      first_message_at: firstMessage?.created_at ?? null,
+      first_message_direction: firstMessage?.direction ?? null,
+      last_message_direction: lastMessage?.direction ?? null,
+      // Défauts produit détectés dans la demande initiale — axe distinct de
+      // `category` (qui décrit la démarche), destiné à l'équipe offre.
+      product_issues: detectProductIssues(ticketForClassification.subject, firstMessage?.body),
       ...extractTracking(so?.raw || {}),
       created_at: pick(raw, 'created_at'),
       updated_at: pick(raw, 'last_updated_at', 'updated_at'),

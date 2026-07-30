@@ -51,11 +51,11 @@ export default function App() {
         period={period}
         setPeriod={setPeriod}
       />
-      <main className="max-w-[1400px] mx-auto px-8 py-10">
+      <main className="max-w-[1600px] mx-auto px-6 py-6">
         <ActiveView selectedChannel={selectedChannel} period={period} channels={channels} />
       </main>
-      <footer className="max-w-[1400px] mx-auto px-8 py-12 text-xs text-muted border-t border-rule/10 mt-20 flex justify-between">
-        <span>BestMobilier · SAV Tracker · v0.2 (eDesk × PrestaShop)</span>
+      <footer className="max-w-[1600px] mx-auto px-6 py-6 text-[11px] text-muted border-t border-rule/10 mt-12 flex justify-between">
+        <span>BestMobilier · SAV Tracker · v2.1</span>
         <span className="font-mono">Sync manuel — run automatique désactivé</span>
       </footer>
     </div>
