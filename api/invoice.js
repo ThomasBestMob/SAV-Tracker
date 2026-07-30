@@ -183,7 +183,7 @@ export default async function handler(req, res) {
     }
     let invoiceHref = invoiceMatch[1].replace(/&amp;/g, '&');
     if (!invoiceHref.startsWith('http')) {
-      invoiceHref = `${ADMIN_URL}/${invoiceHref.replace(/^\//, '')}`;
+      invoiceHref = `${new URL(ADMIN_URL).origin}${invoiceHref.startsWith('/') ? '' : '/'}${invoiceHref}`;
     }
 
     log.push({ step: 'invoice url', href: invoiceHref });
