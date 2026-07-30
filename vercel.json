@@ -1,5 +1,5 @@
 {
   "functions": {
-    "api/invoice.js": { "maxDuration": 15 }
+    "api/invoice.js": { "maxDuration": 60 }
   }
 }
