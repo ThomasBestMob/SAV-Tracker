@@ -138,8 +138,23 @@ export default async function handler(req, res) {
 
     // Le lien peut avoir des entités HTML (&amp;)
     const invoiceMatch = orderHtml.match(/href="([^"]*generateInvoicePDF[^"]*)"/i);
+
+    // Cherche aussi des liens générique PDF pour diagnostic
+    const allPdfLinks = [...orderHtml.matchAll(/href="([^"]*(?:PDF|pdf|facture|invoice)[^"]*)"/gi)]
+      .map(m => m[1]).slice(0, 5);
+
+    log.push({
+      step: 'order page',
+      status: orderRes.status,
+      finalUrl: orderRes.url,
+      hasPasswd: orderHtml.includes('name="passwd"'),
+      invoiceFound: !!invoiceMatch,
+      pdfLinksFound: allPdfLinks,
+      bodySnippet: orderHtml.slice(0, 400),
+    });
+
     if (!invoiceMatch) {
-      // Détecter si on a été renvoyé au login (session perdue)
+      if (debug) return res.status(200).json({ debug: log });
       if (orderHtml.includes('submitLogin') || orderHtml.includes('name="passwd"')) {
         return res.status(502).json({ error: 'Session BO expirée avant d\'atteindre la fiche commande.' });
       }
@@ -147,6 +162,7 @@ export default async function handler(req, res) {
         error: `Aucune facture disponible pour la commande PrestaShop #${orderId} — commande non facturée ou identifiant incorrect.`,
       });
     }
+    if (debug) return res.status(200).json({ debug: log });
 
     let invoiceHref = invoiceMatch[1].replace(/&amp;/g, '&');
     if (!invoiceHref.startsWith('http')) {
