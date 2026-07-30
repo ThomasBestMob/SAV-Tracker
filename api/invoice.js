@@ -21,7 +21,11 @@ const ADMIN_URL = process.env.PRESTASHOP_ADMIN_URL;
 const ADMIN_EMAIL = process.env.PRESTASHOP_ADMIN_EMAIL;
 const ADMIN_PASSWORD = process.env.PRESTASHOP_ADMIN_PASSWORD;
 
-module.exports = async function handler(req, res) {
+// ESM et non `module.exports` : package.json déclare "type": "module", donc ce
+// fichier est chargé comme module ES. Avec module.exports, la fonction échouait
+// dès le chargement ("module is not defined in ES module scope") — d'où une
+// erreur générique côté front au lieu du message explicite prévu plus bas.
+export default async function handler(req, res) {
   const orderId = String(req.query.order_id || '').trim();
   if (!/^\d+$/.test(orderId)) {
     return res.status(400).json({ error: 'order_id (id commande PrestaShop) requis.' });
@@ -41,7 +45,7 @@ module.exports = async function handler(req, res) {
     // En serverless (Vercel) le runtime n'embarque pas de navigateur : on
     // utilise le binaire fourni par @sparticuz/chromium. En local, Playwright
     // retombe sur le Chromium installé par `npx playwright install`.
-    const { chromium } = require('playwright-core');
+    const { chromium } = await import('playwright-core');
     const sparticuz = await import('@sparticuz/chromium').then((m) => m.default).catch(() => null);
     browser = await chromium.launch(
       sparticuz

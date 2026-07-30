@@ -39,8 +39,18 @@ async function downloadInvoice(psOrderId, ref) {
   try {
     const r = await fetch(`/api/invoice?order_id=${encodeURIComponent(psOrderId)}`);
     if (!r.ok) {
-      const body = await r.json().catch(() => ({}));
-      alert(body.error || 'Récupération de la facture indisponible.');
+      // Remonter le code HTTP et le début du corps quand la réponse n'est pas
+      // du JSON : sans ça, un plantage de la fonction serverless (qui renvoie
+      // du HTML) est indistinguable d'un refus applicatif, et le message
+      // générique n'oriente vers rien.
+      const raw = await r.text().catch(() => '');
+      let msg;
+      try {
+        msg = JSON.parse(raw).error;
+      } catch {
+        msg = `HTTP ${r.status} — réponse non JSON : ${raw.slice(0, 200) || '(vide)'}`;
+      }
+      alert(msg || `HTTP ${r.status} sans détail.`);
       return;
     }
     const blob = await r.blob();

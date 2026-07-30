@@ -1,0 +1,51 @@
+name: Build
+
+# Le build Vercel est la seule vérification de compilation du projet, et son
+# échec est silencieux côté utilisateur : Vercel continue de servir le dernier
+# déploiement réussi, si bien qu'on croit tester la nouvelle version alors qu'on
+# regarde l'ancienne. Ce workflow rend l'échec visible dans GitHub, sur le commit
+# fautif.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  build:
+    name: Compile le front
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+
+      # `npm install` et non `npm ci` : pas de package-lock.json dans le repo.
+      # --omit=optional écarte @sparticuz/chromium (~50 Mo, utile uniquement à la
+      # route facture côté serverless) : il n'a rien à faire dans un contrôle de
+      # compilation du front.
+      - run: npm install --omit=optional
+
+      - run: npm run build
+
+      # Vérifie aussi que les modules partagés avec le sync se chargent : ils
+      # tournent sous Node, pas dans le bundle Vite, donc le build du front ne
+      # les couvre pas.
+      - name: Vérifie les modules du sync
+        run: |
+          node --input-type=module -e "
+            import { classifyTicket, computeTicketPriority } from './src/lib/priority.js';
+            import { detectProductIssues } from './src/lib/productIssues.js';
+            const c = classifyTicket({ subject: 'Demande de facture', tags: [] });
+            if (c !== 'facture') throw new Error('classifyTicket inattendu : ' + c);
+            const i = detectProductIssues('Pied cassé', 'Le pied du canapé est cassé et l assise s affaisse');
+            if (!i.includes('casse_structure')) throw new Error('detectProductIssues inattendu : ' + JSON.stringify(i));
+            console.log('Modules du sync OK — categorie=' + c + ' defauts=' + JSON.stringify(i));
+          "
+
+      # Syntaxe seule : le script sort en erreur dès le chargement si les
+      # variables d'environnement manquent, on ne peut donc pas l'exécuter ici.
+      - name: Vérifie la syntaxe du sync
+        run: node --check sync/edesk_sync.js
