@@ -162,16 +162,23 @@ export default async function handler(req, res) {
         error: `Aucune facture disponible pour la commande PrestaShop #${orderId} — commande non facturée ou identifiant incorrect.`,
       });
     }
-    if (debug) return res.status(200).json({ debug: log });
-
     let invoiceHref = invoiceMatch[1].replace(/&amp;/g, '&');
     if (!invoiceHref.startsWith('http')) {
       invoiceHref = `${ADMIN_URL}/${invoiceHref.replace(/^\//, '')}`;
     }
 
+    log.push({ step: 'invoice url', href: invoiceHref });
+    if (debug) return res.status(200).json({ debug: log });
+
     // ── Étape 4 : téléchargement du PDF ──────────────────────────────────────
+    // Referer = la fiche commande qu'on vient de charger (même _token dans l'URL).
     const pdfRes = await fetch(invoiceHref, {
-      headers: { 'Cookie': jar, 'User-Agent': UA },
+      headers: {
+        'Cookie': jar,
+        'User-Agent': UA,
+        'Referer': orderRes.url,
+        'Accept': 'application/pdf,*/*',
+      },
       redirect: 'follow',
     });
 
@@ -181,9 +188,14 @@ export default async function handler(req, res) {
 
     const buffer = Buffer.from(await pdfRes.arrayBuffer());
     if (buffer.subarray(0, 4).toString('ascii') !== '%PDF') {
-      const preview = buffer.subarray(0, 120).toString('utf8').replace(/\s+/g, ' ');
-      return res.status(502).json({
-        error: `La réponse n'est pas un PDF (session expirée ou PDF non généré). Début : ${preview}`,
+      const text = buffer.toString('utf8');
+      // Essayer de détecter une erreur PS connue
+      const noInvoice = /no.?invoice|aucune.?facture|order.?invoice.?not.?found/i.test(text);
+      const preview = text.slice(0, 200).replace(/\s+/g, ' ');
+      return res.status(noInvoice ? 404 : 502).json({
+        error: noInvoice
+          ? `La commande #${orderId} n'a pas de facture dans PrestaShop — elle n'a peut-être pas encore été facturée (statut : paiement accepté requis).`
+          : `La réponse n'est pas un PDF. Début : ${preview}`,
       });
     }
 
