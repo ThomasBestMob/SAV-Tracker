@@ -58,22 +58,24 @@ function effectiveSince(cursor, lookbackDays) {
 
 function sleep(ms) { return new Promise((resolve) => setTimeout(resolve, ms)); }
 
-async function edeskGet(path, params = {}) {
-  const url = new URL(`${EDESK_BASE}${path}`);
-  Object.entries(params).forEach(([k, v]) => { if (v != null) url.searchParams.set(k, v); });
-  const r = await fetch(url, {
-    headers: {
-      // Format d'auth non confirmé (doc statique ne le montre pas) : on essaie
-      // Bearer en priorité (convention la plus courante), avec repli X-API-KEY
-      // si le premier essai échoue en 401 (voir edeskGetWithFallback).
-      Authorization: `Bearer ${EDESK_TOKEN}`,
-      Accept: 'application/json',
-    },
-  });
-  return r;
+// Format d'auth non confirmé par la doc : Bearer en priorité (convention la plus
+// courante), repli X-API-KEY. Le mode retenu est mémorisé dans _authMode et
+// RESPECTÉ ici — la version précédente envoyait toujours Bearer, si bien que le
+// repli ne fonctionnait qu'une seule fois puis tous les appels suivants
+// échouaient en 401 sans jamais réessayer l'autre mode.
+let _authMode = 'bearer';
+
+function authHeaders(mode) {
+  return mode === 'bearer'
+    ? { Authorization: `Bearer ${EDESK_TOKEN}`, Accept: 'application/json' }
+    : { 'X-API-KEY': EDESK_TOKEN, Accept: 'application/json' };
 }
 
-let _authMode = 'bearer';
+async function edeskGet(path, params = {}, mode = _authMode) {
+  const url = new URL(`${EDESK_BASE}${path}`);
+  Object.entries(params).forEach(([k, v]) => { if (v != null) url.searchParams.set(k, v); });
+  return fetch(url, { headers: authHeaders(mode) });
+}
 
 // Retry avec backoff sur 429 ("Out of quota" observé en prod) — respecte
 // Retry-After si présent, sinon backoff exponentiel. Ne masque pas une vraie
@@ -85,11 +87,16 @@ async function edeskGetSmart(path, params) {
   let attempt = 0;
   for (;;) {
     let r = await edeskGet(path, params);
-    if (r.status === 401 && _authMode === 'bearer') {
-      _authMode = 'x-api-key';
-      const url = new URL(`${EDESK_BASE}${path}`);
-      Object.entries(params || {}).forEach(([k, v]) => { if (v != null) url.searchParams.set(k, v); });
-      r = await fetch(url, { headers: { 'X-API-KEY': EDESK_TOKEN, Accept: 'application/json' } });
+    if (r.status === 401) {
+      // Bascule sur l'autre mode d'auth et ne l'adopte que s'il marche : un
+      // jeton expiré échoue dans les deux modes, il ne faut pas conclure d'un
+      // 401 que le mode était mauvais.
+      const other = _authMode === 'bearer' ? 'x-api-key' : 'bearer';
+      const r2 = await edeskGet(path, params, other);
+      if (r2.ok) {
+        _authMode = other;
+        r = r2;
+      }
     }
     if (r.status === 429 && attempt < MAX_429_RETRIES) {
       attempt += 1;
@@ -371,6 +378,14 @@ async function syncReferenceData() {
   await sbUpsert('sav_templates', templates.map(extractTemplate), 'id');
   await sbUpsert('sav_contacts', contacts.map(extractContact), 'id');
   console.log(`  ${channels.length} canaux, ${users.length} users, ${tagGroups.length} groupes de tags, ${templates.length} templates, ${contacts.length} contacts.`);
+
+  // Zéro canal ET zéro utilisateur n'arrive pas sur un compte eDesk en service :
+  // c'est le signe que les appels échouent (quota, permissions révoquées) et que
+  // les catch par ressource masquent la panne. À distinguer de zéro ticket, qui
+  // est normal sur un run incrémental.
+  if (!channels.length && !users.length) {
+    throw new Error('Aucun canal ni utilisateur remonté par eDesk — appels en échec (voir les avertissements ci-dessus), sync interrompu.');
+  }
   return { channelsById: new Map(channels.map((c) => [String(pick(c, 'id')), extractChannel(c).name])) };
 }
 
@@ -574,7 +589,27 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
   }
 }
 
+// Contrôle d'accès avant tout travail. Sans lui, un jeton expiré ne se voit
+// pas : chaque ressource est protégée par un catch qui se contente d'un
+// avertissement, donc tout revient vide, "0 tickets à traiter" s'affiche, et le
+// run se termine en 15 secondes en se déclarant réussi. Le jeton eDesk expire à
+// 90 jours — ce cas se produira forcément, il doit être bruyant.
+async function assertEdeskAuth() {
+  try {
+    await edeskGetSmart('/channels', { page: 1, itemsPerPage: 1 });
+  } catch (e) {
+    if (/eDesk 40[0-9]/.test(e.message)) {
+      console.error('❌ eDesk refuse l\'authentification — jeton vraisemblablement expiré (90 jours par défaut).');
+      console.error('   Régénérer sur dashboard.edesk.com/api-token, puis mettre à jour le secret GitHub EDESK_API_TOKEN.');
+      console.error(`   Réponse brute : ${e.message}`);
+      process.exit(1);
+    }
+    throw e;
+  }
+}
+
 async function main() {
+  await assertEdeskAuth();
   const { channelsById } = await syncReferenceData();
   const salesOrdersById = await syncSalesOrders();
   await syncTicketsAndMessages(channelsById, salesOrdersById);
