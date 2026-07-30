@@ -98,15 +98,10 @@ export default function Products() {
     setDetailLoading(true);
     setDetail(null);
     setDetailError(null);
-    let q = supabase
-      .from('sav_ticket_enriched')
-      .select('id,subject,category,created_at,channel_key,first_message_body,edesk_order_reference,product_issues')
-      .contains('product_refs', [ref])
-      .eq('is_customer_request', true)
-      .order('created_at', { ascending: false })
-      .limit(100);
-    if (issue !== 'all') q = q.contains('product_issues', [issue]);
-    const { data, error } = await q;
+    const { data, error } = await supabase.rpc('get_product_verbatims', {
+      p_ref: ref,
+      p_issue: issue !== 'all' ? issue : null,
+    });
     if (error) setDetailError(error.message);
     else setDetail(data || []);
     setDetailLoading(false);
