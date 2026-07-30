@@ -30,6 +30,11 @@ on:
         required: false
         default: ""
         type: string
+      sales_order_lookback_days:
+        description: "Profondeur d'historique commandes en jours (défaut 90) — à augmenter pour rattacher les tickets anciens"
+        required: false
+        default: ""
+        type: string
       reclassify_only:
         description: "Reclassifier depuis la base seule (aucun appel eDesk) — pour ajuster la taxonomie des défauts produit"
         required: false
@@ -61,6 +66,7 @@ jobs:
           FULL_SYNC: ${{ github.event.inputs.full_sync || 'false' }}
           TICKET_SYNC_LIMIT: ${{ github.event.inputs.ticket_limit }}
           TICKET_LOOKBACK_DAYS: ${{ github.event.inputs.ticket_lookback_days || '14' }}
+          SALES_ORDER_LOOKBACK_DAYS: ${{ github.event.inputs.sales_order_lookback_days || '90' }}
           RECLASSIFY_ONLY: ${{ github.event.inputs.reclassify_only || 'false' }}
         run: node sync/edesk_sync.js
 
