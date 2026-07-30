@@ -135,7 +135,9 @@ export default async function handler(req, res) {
     const orderHtml = await orderRes.text();
 
     // Le lien peut avoir des entités HTML (&amp;)
-    const invoiceMatch = orderHtml.match(/href="([^"]*generateInvoicePDF[^"]*)"/i);
+    // PS 1.7+ (Symfony) : generate-invoice-pdf  |  PS 1.6 : generateInvoicePDF
+    const invoiceMatch = orderHtml.match(/href="([^"]*generate-invoice-pdf[^"]*)"/i)
+                      || orderHtml.match(/href="([^"]*generateInvoicePDF[^"]*)"/i);
 
     // Cherche aussi des liens générique PDF pour diagnostic
     const allPdfLinks = [...orderHtml.matchAll(/href="([^"]*(?:PDF|pdf|facture|invoice)[^"]*)"/gi)]
