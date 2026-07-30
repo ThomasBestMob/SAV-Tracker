@@ -70,9 +70,10 @@ export default async function handler(req, res) {
     const token = tokenMatch?.[1] ?? '';
 
     // ── Étape 2 : POST des identifiants ──────────────────────────────────────
-    // redirect: 'follow' — PS redirige (302) aussi bien en cas de succès que
-    // d'échec. On suit la redirection et on inspecte le contenu de la page
-    // résultante plutôt que l'URL de destination.
+    // redirect: 'manual' obligatoire : avec 'follow', Node.js ne remonte que
+    // les cookies de la réponse finale, pas ceux du 302 intermédiaire. Or PS
+    // pose le cookie de session admin dans ce 302 — on le perdrait et toutes
+    // les requêtes suivantes seraient non authentifiées.
     const postRes = await fetch(`${ADMIN_URL}/index.php`, {
       method: 'POST',
       headers: {
@@ -87,18 +88,37 @@ export default async function handler(req, res) {
         submitLogin: '1',
         token,
       }).toString(),
-      redirect: 'follow',
+      redirect: 'manual',
     });
 
+    // Capturer les cookies du 302 (session admin)
     jar = mergeJar(jar, extractCookies(postRes.headers));
-    const postBody = await postRes.text();
 
-    // La page de login contient toujours le champ passwd ou submitLogin.
-    // Si on les retrouve après le POST, le login a échoué.
-    if (postBody.includes('name="passwd"') || postBody.includes('submitLogin')) {
-      return res.status(502).json({
-        error: 'Connexion au back-office PrestaShop refusée. Vérifier les identifiants PRESTASHOP_ADMIN_EMAIL / _PASSWORD dans Vercel et que le compte n\'a pas de double authentification (2FA).',
+    const location = postRes.headers.get('location') || '';
+    if (!location) {
+      // PS n'a pas redirigé — réponse directe (rare), lire le corps
+      const body = await postRes.text().catch(() => '');
+      if (body.includes('name="passwd"') || body.includes('id="login_form"')) {
+        return res.status(502).json({
+          error: 'Connexion au back-office PrestaShop refusée. Vérifier PRESTASHOP_ADMIN_EMAIL / _PASSWORD dans Vercel et que le compte n\'a pas de double authentification (2FA).',
+        });
+      }
+    } else {
+      // Suivre la redirection manuellement pour capturer les cookies de la page dashboard
+      const redir = location.startsWith('http') ? location : `${ADMIN_URL}${location.startsWith('/') ? '' : '/'}${location}`;
+      const dashRes = await fetch(redir, {
+        headers: { 'Cookie': jar, 'User-Agent': UA },
+        redirect: 'follow',
       });
+      jar = mergeJar(jar, extractCookies(dashRes.headers));
+      const dashBody = await dashRes.text();
+
+      // Si la page résultante contient encore le formulaire de login, c'est un échec
+      if (dashBody.includes('name="passwd"') || dashBody.includes('id="login_form"')) {
+        return res.status(502).json({
+          error: 'Connexion au back-office PrestaShop refusée. Vérifier PRESTASHOP_ADMIN_EMAIL / _PASSWORD dans Vercel et que le compte n\'a pas de double authentification (2FA).',
+        });
+      }
     }
 
     // ── Étape 3 : fiche commande → URL de la facture ─────────────────────────
