@@ -398,19 +398,25 @@ async function syncSalesOrders() {
   // eDesk (500 "Failed to parse time string (<epoch> 00:00:00)"), contrairement
   // à /tickets qui accepte bien ce format date-string sur filter_last_updated_at_gte.
   const params = { filter_created_at_gte: since.slice(0, 10) };
-  const orders = await edeskListAll('sales-orders', params).catch((e) => { console.warn('  sales-orders:', e.message); return []; });
+  let failed = false;
+  const orders = await edeskListAll('sales-orders', params).catch((e) => { console.warn('  sales-orders:', e.message); failed = true; return []; });
   const rows = orders.map(extractSalesOrder).filter((r) => r.id != null);
   await sbUpsert('sav_sales_orders', rows, 'id');
   console.log(`  ${rows.length} commandes.`);
 
   console.log('▶ Order notes...');
-  const notes = await edeskListAll('order-notes', params).catch((e) => { console.warn('  order-notes:', e.message); return []; });
+  const notes = await edeskListAll('order-notes', params).catch((e) => { console.warn('  order-notes:', e.message); failed = true; return []; });
   const noteRows = notes.map(extractOrderNote).filter((r) => r.id != null);
   await sbUpsert('sav_order_notes', noteRows, 'id');
   console.log(`  ${noteRows.length} notes.`);
 
   const bySalesOrderId = new Map(rows.map((o) => [String(o.id), o]));
-  await setSyncCursor('sales_orders', new Date().toISOString());
+  // Le curseur ne doit avancer que si la fenêtre a réellement été parcourue.
+  // L'avancer après un appel en échec revient à déclarer synchronisée une
+  // période qui ne l'a jamais été : le run suivant repart d'après et le trou
+  // devient définitif.
+  if (!failed) await setSyncCursor('sales_orders', new Date().toISOString());
+  else console.warn('  curseur commandes NON avancé (appel en échec) — la fenêtre sera réessayée.');
   return bySalesOrderId;
 }
 
@@ -419,7 +425,8 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
   const since = effectiveSince(cursor, TICKET_LOOKBACK_DAYS);
   console.log(`▶ Tickets (depuis ${since}, fenêtre max ${TICKET_LOOKBACK_DAYS}j)...`);
   const params = { filter_last_updated_at_gte: since.slice(0, 10) };
-  let tickets = await edeskListAll('tickets', params).catch((e) => { console.warn('  tickets:', e.message); return []; });
+  let fetchFailed = false;
+  let tickets = await edeskListAll('tickets', params).catch((e) => { console.warn('  tickets:', e.message); fetchFailed = true; return []; });
   console.log(`  ${tickets.length} tickets dans la fenêtre.`);
 
   const limited = TICKET_SYNC_LIMIT != null && tickets.length > TICKET_SYNC_LIMIT;
@@ -577,9 +584,11 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
   }
 
   await sbUpsert('sav_tickets', ticketRows, 'id');
-  // Si TICKET_SYNC_LIMIT a tronqué le lot, ne pas avancer le curseur : les tickets
-  // laissés de côté doivent rester couverts par le prochain run normal.
-  if (!limited) await setSyncCursor('tickets', new Date().toISOString());
+  // Le curseur n'avance que si la fenêtre a été parcourue en entier : ni
+  // tronquée par TICKET_SYNC_LIMIT (les tickets écartés doivent rester couverts
+  // par le prochain run), ni amputée par un appel en échec.
+  if (!limited && !fetchFailed) await setSyncCursor('tickets', new Date().toISOString());
+  else if (fetchFailed) console.warn('  curseur tickets NON avancé (appel en échec) — la fenêtre sera réessayée.');
 
   console.log(`  ${ticketRows.length} tickets synchronisés.`);
   if (sample) {
