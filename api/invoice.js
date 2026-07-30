@@ -109,7 +109,7 @@ export default async function handler(req, res) {
         return res.status(502).json({ error: 'Connexion PS refusée (pas de redirection). Vérifier identifiants.' });
       }
     } else {
-      const redir = location.startsWith('http') ? location : `${ADMIN_URL}${location.startsWith('/') ? '' : '/'}${location}`;
+      const redir = location.startsWith('http') ? location : `${new URL(ADMIN_URL).origin}${location.startsWith('/') ? '' : '/'}${location}`;
       const dashRes = await fetch(redir, {
         headers: { 'Cookie': jar, 'User-Agent': UA },
         redirect: 'follow',
@@ -137,10 +137,13 @@ export default async function handler(req, res) {
     jar = mergeJar(jar, extractCookies(orderRes.headers));
 
     // Suivre les redirections manuellement
+    const origin = new URL(ADMIN_URL).origin; // https://bestmobilier.com (sans le chemin /admin6)
     let hops = 0;
     while ((orderRes.status === 301 || orderRes.status === 302 || orderRes.status === 307 || orderRes.status === 308) && hops < 5) {
+      await orderRes.arrayBuffer().catch(() => {}); // vider le corps avant de continuer
       const loc = orderRes.headers.get('location') || '';
-      const next = loc.startsWith('http') ? loc : `${ADMIN_URL}${loc.startsWith('/') ? '' : '/'}${loc}`;
+      // loc peut être un chemin absolu (/admin6/...) ou une URL complète
+      const next = loc.startsWith('http') ? loc : `${origin}${loc.startsWith('/') ? '' : '/'}${loc}`;
       orderRes = await fetch(next, {
         headers: { 'Cookie': jar, 'User-Agent': UA },
         redirect: 'manual',
