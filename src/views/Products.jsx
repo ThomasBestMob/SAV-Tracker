@@ -20,23 +20,28 @@ const MIN_VENTES = 10;
 export default function Products() {
   const [issueStats, setIssueStats] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [issue, setIssue] = useState('all');
   const [search, setSearch] = useState('');
   const [selected, setSelected] = useState(null);
   const [detail, setDetail] = useState(null);
   const [detailLoading, setDetailLoading] = useState(false);
 
-  useEffect(() => {
+  function load() {
     setLoading(true);
+    setLoadError(null);
     supabase
       .from('sav_product_issue_stats')
       .select('*')
       .limit(5000)
       .then(({ data, error }) => {
-        if (!error && data) setIssueStats(data);
+        if (error) { setLoadError(error.message); }
+        else if (data) setIssueStats(data);
         setLoading(false);
       });
-  }, []);
+  }
+
+  useEffect(load, []);
 
   // Volume par nature de défaut, toutes références confondues — la première
   // lecture utile : où est le gros du problème sur l'ensemble du catalogue.
@@ -130,22 +135,39 @@ export default function Products() {
       <div className="flex items-baseline justify-between gap-4 flex-wrap">
         <div className="text-[11px] text-muted max-w-2xl">
           {issue === 'all' ? (
-            <>Références générant des défauts produit sur 180 jours — hors motifs purement logistiques ou administratifs. Taux calculé à partir de {MIN_VENTES} ventes minimum.</>
+            <>Références générant des défauts produit — hors motifs purement logistiques ou administratifs. Taux calculé à partir de {MIN_VENTES} ventes minimum.</>
           ) : (
             <><strong className="text-ink">{productIssueLabel(issue)}</strong> — {productIssueHint(issue)}</>
           )}
         </div>
-        <input
-          type="text"
-          placeholder="Réf ou nom produit"
-          value={search}
-          onChange={(e) => setSearch(e.target.value)}
-          className="bg-transparent border border-ink/20 px-3 py-1.5 text-xs focus:outline-none focus:border-accent font-mono w-60"
-        />
+        <div className="flex items-center gap-3 shrink-0">
+          {issueStats.length > 0 && (() => {
+            const dates = issueStats.map(r => r.dernier_ticket_at).filter(Boolean).sort();
+            const oldest = dates[0] ? new Date(dates[0]).toLocaleDateString('fr-FR') : null;
+            const newest = dates[dates.length - 1] ? new Date(dates[dates.length - 1]).toLocaleDateString('fr-FR') : null;
+            return oldest && newest ? (
+              <span className="text-[10px] text-muted font-mono whitespace-nowrap">
+                {oldest === newest ? `au ${newest}` : `${oldest} → ${newest}`}
+              </span>
+            ) : null;
+          })()}
+          <input
+            type="text"
+            placeholder="Réf ou nom produit"
+            value={search}
+            onChange={(e) => setSearch(e.target.value)}
+            className="bg-transparent border border-ink/20 px-3 py-1.5 text-xs focus:outline-none focus:border-accent font-mono w-52"
+          />
+        </div>
       </div>
 
-      {loading ? <Loading /> : products.length === 0 ? (
-        <Empty message="Aucun défaut produit détecté — lance un sync complet pour analyser les messages clients." />
+      {loading ? <Loading /> : loadError ? (
+        <div className="border border-urgent/30 bg-urgent/5 px-4 py-3 text-xs text-urgent flex items-center justify-between gap-4">
+          <span>Erreur de chargement : {loadError}</span>
+          <button onClick={load} className="text-[11px] uppercase tracking-wider border border-urgent/40 px-2 py-0.5 hover:bg-urgent/10">Réessayer</button>
+        </div>
+      ) : products.length === 0 ? (
+        <Empty message="Aucun défaut produit détecté — lance le workflow avec reclassify_only:true pour classifier les tickets existants." />
       ) : (
         <div className="border border-ink/8 overflow-x-auto">
           <table className="w-full text-sm min-w-[860px]">

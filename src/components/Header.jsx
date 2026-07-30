@@ -29,20 +29,24 @@ export default function Header({ views, currentView, setCurrentView, channels, s
           ))}
         </nav>
 
-        <div className="flex gap-2 items-center shrink-0">
-          <select className={selectCls} value={selectedChannel} onChange={(e) => setSelectedChannel(e.target.value)}>
-            <option value="all">Tous canaux</option>
-            {channels.map((c) => (
-              <option key={c.id} value={c.id}>{c.name}</option>
-            ))}
-          </select>
-          <select className={selectCls} value={period} onChange={(e) => setPeriod(e.target.value)}>
-            <option value="7">7 j</option>
-            <option value="30">30 j</option>
-            <option value="90">90 j</option>
-            <option value="365">1 an</option>
-          </select>
-        </div>
+        {/* Filtres canal + période : masqués sur Anomalies produit (vue globale
+            sur 180 j glissants, le filtre n'a aucun effet et crée de la confusion) */}
+        {currentView !== 'products' && (
+          <div className="flex gap-2 items-center shrink-0">
+            <select className={selectCls} value={selectedChannel} onChange={(e) => setSelectedChannel(e.target.value)}>
+              <option value="all">Tous canaux</option>
+              {channels.map((c) => (
+                <option key={c.id} value={c.id}>{c.name}</option>
+              ))}
+            </select>
+            <select className={selectCls} value={period} onChange={(e) => setPeriod(e.target.value)}>
+              <option value="7">7 j</option>
+              <option value="30">30 j</option>
+              <option value="90">90 j</option>
+              <option value="365">1 an</option>
+            </select>
+          </div>
+        )}
       </div>
     </header>
   );
