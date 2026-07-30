@@ -38,8 +38,16 @@ const SALES_ORDER_LOOKBACK_DAYS = parseInt(process.env.SALES_ORDER_LOOKBACK_DAYS
 // Pour tester rapidement (run manuel) sans traiter tout le backlog : ne garde que les
 // N tickets les plus récents (par last_updated_at) après le fetch de la fenêtre.
 const TICKET_SYNC_LIMIT = process.env.TICKET_SYNC_LIMIT ? parseInt(process.env.TICKET_SYNC_LIMIT, 10) : null;
+// Reclassification seule : recalcule catégorie et défauts produit à partir des
+// messages DÉJÀ en base, sans un seul appel eDesk. Deux usages :
+//   - ajuster la taxonomie (mots-clés) et voir le résultat en une minute, au
+//     lieu de re-télécharger 45 min de tickets pour une règle changée ;
+//   - continuer à travailler quand l'accès eDesk est indisponible.
+const RECLASSIFY_ONLY = String(process.env.RECLASSIFY_ONLY || 'false').toLowerCase() === 'true';
 
-if (!EDESK_TOKEN) { console.error('❌ EDESK_API_TOKEN requis.'); process.exit(1); }
+// La reclassification ne parle qu'à Supabase : ne pas exiger de jeton eDesk,
+// c'est précisément le mode qui doit rester utilisable quand l'accès est perdu.
+if (!EDESK_TOKEN && !RECLASSIFY_ONLY) { console.error('❌ EDESK_API_TOKEN requis.'); process.exit(1); }
 if (!SB_URL || !SB_KEY) { console.error('❌ SUPABASE_URL / SUPABASE_SERVICE_KEY requis.'); process.exit(1); }
 
 function daysAgoIso(days) {
@@ -617,7 +625,63 @@ async function assertEdeskAuth() {
   }
 }
 
+/**
+ * Recalcule `category` et `product_issues` sur les tickets déjà stockés, en
+ * relisant leur sujet et le corps du premier message depuis Supabase.
+ *
+ * Aucun appel eDesk : la classification est une fonction pure du texte, il n'y a
+ * aucune raison de repasser par l'API pour la rejouer. C'est ce qui rend la
+ * calibration de la taxonomie praticable — on ajuste des mots-clés, on relance,
+ * on regarde.
+ */
+async function reclassifyStoredTickets() {
+  console.log('▶ Reclassification depuis la base (aucun appel eDesk)...');
+  const PAGE = 1000;
+  let offset = 0;
+  let seen = 0;
+  let withIssues = 0;
+  const issueTally = {};
+
+  for (;;) {
+    const rows = await sbSelect(
+      'sav_tickets',
+      `select=id,subject,type,tags,first_message_body&order=id&limit=${PAGE}&offset=${offset}`
+    );
+    if (!rows.length) break;
+
+    const updates = rows.map((r) => {
+      const issues = detectProductIssues(r.subject, r.first_message_body);
+      issues.forEach((k) => { issueTally[k] = (issueTally[k] || 0) + 1; });
+      if (issues.length) withIssues += 1;
+      return {
+        id: r.id,
+        category: classifyTicket({ subject: r.subject, type: r.type, tags: r.tags }),
+        product_issues: issues,
+      };
+    });
+
+    await sbUpsert('sav_tickets', updates, 'id');
+    seen += rows.length;
+    offset += PAGE;
+    console.log(`  ${seen} tickets reclassés...`);
+    if (rows.length < PAGE) break;
+  }
+
+  console.log(`\n✓ ${seen} tickets reclassés, ${withIssues} porteurs d'au moins un défaut produit.`);
+  const ranked = Object.entries(issueTally).sort((a, b) => b[1] - a[1]);
+  if (ranked.length) {
+    console.log('\n📊 Défauts produit détectés :');
+    ranked.forEach(([k, n]) => console.log(`  ${String(n).padStart(5)}  ${k}`));
+  } else {
+    console.log('\n⚠ Aucun défaut détecté — probablement parce que first_message_body est vide sur la plupart des tickets (il faut un sync eDesk pour le remplir).');
+  }
+}
+
 async function main() {
+  if (RECLASSIFY_ONLY) {
+    await reclassifyStoredTickets();
+    return;
+  }
   await assertEdeskAuth();
   const { channelsById } = await syncReferenceData();
   const salesOrdersById = await syncSalesOrders();

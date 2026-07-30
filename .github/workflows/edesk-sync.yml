@@ -30,6 +30,12 @@ on:
         required: false
         default: ""
         type: string
+      reclassify_only:
+        description: "Reclassifier depuis la base seule (aucun appel eDesk) — pour ajuster la taxonomie des défauts produit"
+        required: false
+        default: "false"
+        type: choice
+        options: ["false", "true"]
 
 jobs:
   sync:
@@ -55,6 +61,7 @@ jobs:
           FULL_SYNC: ${{ github.event.inputs.full_sync || 'false' }}
           TICKET_SYNC_LIMIT: ${{ github.event.inputs.ticket_limit }}
           TICKET_LOOKBACK_DAYS: ${{ github.event.inputs.ticket_lookback_days || '14' }}
+          RECLASSIFY_ONLY: ${{ github.event.inputs.reclassify_only || 'false' }}
         run: node sync/edesk_sync.js
 
       - name: Notify on failure
