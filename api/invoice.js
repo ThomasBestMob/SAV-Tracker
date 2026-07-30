@@ -54,26 +54,25 @@ export default async function handler(req, res) {
     });
   }
 
+  const debug = req.query.debug === '1';
+  const log = [];
+
   try {
-    // ── Étape 1 : page de login pour récupérer le cookie de session ──────────
+    // ── Étape 1 : page de login ───────────────────────────────────────────────
     const getRes = await fetch(`${ADMIN_URL}/index.php`, {
       headers: { 'User-Agent': UA },
       redirect: 'follow',
     });
     let jar = extractCookies(getRes.headers);
     const loginHtml = await getRes.text();
+    log.push({ step: 'GET login', status: getRes.status, url: getRes.url, cookies: jar.length });
 
-    // Token CSRF — présent sur certaines versions PS, optionnel sinon.
-    // Les deux ordres d'attributs sont couverts (name=... value=... ou value=... name=...).
     const tokenMatch = loginHtml.match(/name=["']token["'][^>]*value=["']([^"']+)["']/i)
                     || loginHtml.match(/value=["']([^"']+)["'][^>]*name=["']token["']/i);
     const token = tokenMatch?.[1] ?? '';
+    log.push({ step: 'token', found: !!token, length: token.length });
 
     // ── Étape 2 : POST des identifiants ──────────────────────────────────────
-    // redirect: 'manual' obligatoire : avec 'follow', Node.js ne remonte que
-    // les cookies de la réponse finale, pas ceux du 302 intermédiaire. Or PS
-    // pose le cookie de session admin dans ce 302 — on le perdrait et toutes
-    // les requêtes suivantes seraient non authentifiées.
     const postRes = await fetch(`${ADMIN_URL}/index.php`, {
       method: 'POST',
       headers: {
@@ -81,6 +80,9 @@ export default async function handler(req, res) {
         'Cookie': jar,
         'User-Agent': UA,
         'Referer': `${ADMIN_URL}/index.php`,
+        'Origin': new URL(ADMIN_URL).origin,
+        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept-Language': 'fr-FR,fr;q=0.9',
       },
       body: new URLSearchParams({
         email: ADMIN_EMAIL,
@@ -91,20 +93,18 @@ export default async function handler(req, res) {
       redirect: 'manual',
     });
 
-    // Capturer les cookies du 302 (session admin)
     jar = mergeJar(jar, extractCookies(postRes.headers));
-
     const location = postRes.headers.get('location') || '';
+    log.push({ step: 'POST login', status: postRes.status, location, cookies: jar.length });
+
     if (!location) {
-      // PS n'a pas redirigé — réponse directe (rare), lire le corps
       const body = await postRes.text().catch(() => '');
+      log.push({ step: 'no redirect', bodySnippet: body.slice(0, 300) });
+      if (debug) return res.status(200).json({ debug: log });
       if (body.includes('name="passwd"') || body.includes('id="login_form"')) {
-        return res.status(502).json({
-          error: 'Connexion au back-office PrestaShop refusée. Vérifier PRESTASHOP_ADMIN_EMAIL / _PASSWORD dans Vercel et que le compte n\'a pas de double authentification (2FA).',
-        });
+        return res.status(502).json({ error: 'Connexion PS refusée (pas de redirection). Vérifier identifiants.' });
       }
     } else {
-      // Suivre la redirection manuellement pour capturer les cookies de la page dashboard
       const redir = location.startsWith('http') ? location : `${ADMIN_URL}${location.startsWith('/') ? '' : '/'}${location}`;
       const dashRes = await fetch(redir, {
         headers: { 'Cookie': jar, 'User-Agent': UA },
@@ -112,8 +112,10 @@ export default async function handler(req, res) {
       });
       jar = mergeJar(jar, extractCookies(dashRes.headers));
       const dashBody = await dashRes.text();
+      log.push({ step: 'dashboard', status: dashRes.status, url: dashRes.url, hasPasswd: dashBody.includes('name="passwd"'), bodySnippet: dashBody.slice(0, 300) });
 
-      // Si la page résultante contient encore le formulaire de login, c'est un échec
+      if (debug) return res.status(200).json({ debug: log });
+
       if (dashBody.includes('name="passwd"') || dashBody.includes('id="login_form"')) {
         return res.status(502).json({
           error: 'Connexion au back-office PrestaShop refusée. Vérifier PRESTASHOP_ADMIN_EMAIL / _PASSWORD dans Vercel et que le compte n\'a pas de double authentification (2FA).',
