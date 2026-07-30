@@ -23,10 +23,12 @@ jobs:
           node-version: "20"
 
       # `npm install` et non `npm ci` : pas de package-lock.json dans le repo.
-      # --omit=optional écarte @sparticuz/chromium (~50 Mo, utile uniquement à la
-      # route facture côté serverless) : il n'a rien à faire dans un contrôle de
-      # compilation du front.
-      - run: npm install --omit=optional
+      #
+      # Surtout : PAS de --omit=optional. Rollup distribue ses binaires natifs
+      # (@rollup/rollup-linux-x64-gnu) en dépendances optionnelles, les écarter
+      # casse `vite build`. Le coût est de télécharger aussi @sparticuz/chromium,
+      # ce qui reste préférable à un contrôle de compilation qui ne compile pas.
+      - run: npm install
 
       - run: npm run build
 
