@@ -36,21 +36,68 @@ function CopyButton({ text }) {
   );
 }
 
+// Extrait les URLs d'images du body brut (HTML ou texte).
+function extractImageUrls(html) {
+  if (!html) return [];
+  const seen = new Set();
+  const out = [];
+  // <img src="..."> et URLs directes .jpg/.png/...
+  const re = /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp)(?:\?\S*)?/gi;
+  for (const m of (html.matchAll ? html.matchAll(re) : [])) {
+    const u = m[0].replace(/[)>'"]+$/, '');
+    if (!seen.has(u)) { seen.add(u); out.push(u); }
+  }
+  return out;
+}
+
+function PhotosButton({ html }) {
+  const [open, setOpen] = useState(false);
+  const urls = extractImageUrls(html);
+  if (!urls.length) return null;
+  return (
+    <div className="mt-2">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="text-[10px] uppercase tracking-wider text-accent border border-accent/30 px-2 py-0.5 hover:bg-accent/10"
+      >
+        {open ? 'Masquer' : `Photos (${urls.length})`}
+      </button>
+      {open && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {urls.map((u, i) => (
+            <a key={i} href={u} target="_blank" rel="noreferrer">
+              <img src={u} alt={`photo ${i + 1}`} className="max-h-40 max-w-[180px] object-contain border border-ink/10 rounded-sm" />
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 async function downloadInvoice(psOrderId, ref) {
   try {
-    const r = await fetch(`/api/invoice?order_id=${encodeURIComponent(psOrderId)}`);
+    // Si ps_order_id absent (vue légère), on cherche l'ID PS depuis la ref commande
+    let orderId = psOrderId;
+    if (!orderId && ref) {
+      const { supabase: sb } = await import('../supabaseClient');
+      const { data } = await sb
+        .from('ps_sales_daily')
+        .select('order_id')
+        .eq('order_reference', ref)
+        .limit(1)
+        .maybeSingle();
+      orderId = data?.order_id;
+    }
+    if (!orderId) {
+      alert(`Commande PrestaShop introuvable pour la référence "${ref}" — cette commande vient peut-être d'une marketplace (Amazon, Cdiscount…) et n'a pas d'ID PS direct.`);
+      return;
+    }
+    const r = await fetch(`/api/invoice?order_id=${encodeURIComponent(orderId)}`);
     if (!r.ok) {
-      // Remonter le code HTTP et le début du corps quand la réponse n'est pas
-      // du JSON : sans ça, un plantage de la fonction serverless (qui renvoie
-      // du HTML) est indistinguable d'un refus applicatif, et le message
-      // générique n'oriente vers rien.
       const raw = await r.text().catch(() => '');
       let msg;
-      try {
-        msg = JSON.parse(raw).error;
-      } catch {
-        msg = `HTTP ${r.status} — réponse non JSON : ${raw.slice(0, 200) || '(vide)'}`;
-      }
+      try { msg = JSON.parse(raw).error; } catch { msg = `HTTP ${r.status} — ${raw.slice(0, 200) || '(vide)'}`; }
       alert(msg || `HTTP ${r.status} sans détail.`);
       return;
     }
@@ -58,7 +105,7 @@ async function downloadInvoice(psOrderId, ref) {
     const url = URL.createObjectURL(blob);
     const a = document.createElement('a');
     a.href = url;
-    a.download = `facture_${ref || psOrderId}.pdf`;
+    a.download = `facture_${ref || orderId}.pdf`;
     a.click();
     URL.revokeObjectURL(url);
   } catch (e) {
@@ -82,16 +129,21 @@ function Row({ t }) {
         <div className="flex-1 min-w-0">
           <div className="text-sm truncate">{t.subject || '(sans sujet)'}</div>
           <div className="text-[11px] text-muted flex flex-wrap gap-x-2.5 mt-0.5 items-center">
-            {t.channel_key && (
-              <span className={`${chip} border-ink/20 text-muted`}>{channelLabel(t.channel_key)}</span>
-            )}
+            <span className={`${chip} border-ink/20 text-muted`}>
+              {t.channel_key ? channelLabel(t.channel_key) : (t.detectedMarketplace || 'Inconnu')}
+            </span>
+            <span className="text-ink/50">·</span>
+            <span>{t.created_at ? new Date(t.created_at).toLocaleDateString('fr-FR') : '—'}</span>
+            <span className="text-ink/50">·</span>
             <span>{categoryLabel(t.category)}</span>
             {t.product_issues?.length > 0 && (
               <span className="text-accent">{t.product_issues.map(productIssueLabel).join(', ')}</span>
             )}
             {t.edesk_order_reference && <span className="font-mono">{t.edesk_order_reference}</span>}
             {t.order_value ? <span>{Math.round(t.order_value)} €</span> : null}
-            {t.reasons.length > 0 && <span className="italic">{t.reasons[0]}</span>}
+            {t.message_count > 3 && (
+              <span className="italic text-amber-700">{t.message_count} échanges — fil long</span>
+            )}
           </div>
         </div>
 
@@ -132,6 +184,7 @@ function Row({ t }) {
                 </span>
               )}
             </div>
+            <PhotosButton html={t.first_message_body} />
           </div>
           <div>
             <div className="text-[10px] uppercase tracking-widest text-muted mb-1 flex items-center justify-between gap-2">

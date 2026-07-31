@@ -23,8 +23,8 @@ export default function Channels({ period }) {
     Promise.all([
       supabase.from('sav_channel_stats').select('*'),
       supabase
-        .from('sav_ticket_enriched')
-        .select('id,channel_key,category,created_at,last_message_at,ps_order_id,edesk_order_reference,message_count,order_value,tracking_code,expected_delivery_to,awaiting_us,is_customer_request')
+        .from('sav_ticket_light')
+        .select('id,channel_key,category,created_at,last_message_at,edesk_order_reference,message_count,order_value,tracking_code,expected_delivery_to,awaiting_us,is_customer_request')
         .eq('is_open', true)
         .eq('is_customer_request', true)
         .gte('created_at', since)
@@ -48,7 +48,7 @@ export default function Channels({ period }) {
       const c = byChannel[k];
       c.open += 1;
       if (t.sla.level === 'breached') c.breached += 1;
-      if (t.edesk_order_reference) { c.withRef += 1; if (t.ps_order_id) c.linked += 1; }
+      if (t.edesk_order_reference) c.withRef += 1;
       c.byCategory[t.category || 'autre'] = (c.byCategory[t.category || 'autre'] || 0) + 1;
     });
 

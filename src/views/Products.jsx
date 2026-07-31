@@ -5,6 +5,43 @@ import { channelLabel } from '../lib/triage';
 import { productIssueLabel, productIssueHint } from '../lib/productIssues';
 import { stripHtml } from '../lib/stripHtml';
 
+function extractImageUrls(html) {
+  if (!html) return [];
+  const seen = new Set();
+  const out = [];
+  const re = /https?:\/\/\S+\.(?:jpg|jpeg|png|gif|webp)(?:\?\S*)?/gi;
+  for (const m of (html.matchAll ? html.matchAll(re) : [])) {
+    const u = m[0].replace(/[)>'"]+$/, '');
+    if (!seen.has(u)) { seen.add(u); out.push(u); }
+  }
+  return out;
+}
+
+function PhotosButton({ html }) {
+  const [open, setOpen] = useState(false);
+  const urls = extractImageUrls(html);
+  if (!urls.length) return null;
+  return (
+    <div className="mt-1.5">
+      <button
+        onClick={() => setOpen(v => !v)}
+        className="text-[10px] uppercase tracking-wider text-accent border border-accent/30 px-2 py-0.5 hover:bg-accent/10"
+      >
+        {open ? 'Masquer' : `Photos (${urls.length})`}
+      </button>
+      {open && (
+        <div className="mt-2 flex flex-wrap gap-2">
+          {urls.map((u, i) => (
+            <a key={i} href={u} target="_blank" rel="noreferrer">
+              <img src={u} alt={`photo ${i + 1}`} className="max-h-36 max-w-[160px] object-contain border border-ink/10 rounded-sm" />
+            </a>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Sans plancher de ventes, le classement par taux remonte des références à
 // 1 vente / 1 ticket affichées à 100 %, qui masquent les vraies anomalies.
 const MIN_VENTES = 10;
@@ -247,9 +284,12 @@ export default function Products() {
                       {t.product_issues?.length ? ` · ${t.product_issues.map(productIssueLabel).join(', ')}` : ''}
                     </div>
                     {t.first_message_body ? (
-                      <blockquote className="mt-2 text-xs text-ink/80 italic border-l-2 border-accent/30 pl-3 whitespace-pre-wrap max-h-40 overflow-y-auto">
-                        {stripHtml(t.first_message_body)}
-                      </blockquote>
+                      <>
+                        <blockquote className="mt-2 text-xs text-ink/80 italic border-l-2 border-accent/30 pl-3 whitespace-pre-wrap max-h-40 overflow-y-auto">
+                          {stripHtml(t.first_message_body)}
+                        </blockquote>
+                        <PhotosButton html={t.first_message_body} />
+                      </>
                     ) : (
                       <div className="mt-2 text-[11px] italic text-muted">Message non synchronisé.</div>
                     )}
