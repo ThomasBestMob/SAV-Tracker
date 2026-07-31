@@ -162,28 +162,36 @@ function Kpi({ label, value, tone }) {
   );
 }
 
-export default function Queue({ selectedChannel, period }) {
+export default function Queue({ selectedChannel }) {
   const [rows, setRows] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(null);
   const [bucket, setBucket] = useState('a_traiter');
   const [actionFilter, setActionFilter] = useState('all');
 
-  useEffect(() => {
+  function load() {
     setLoading(true);
-    const since = new Date(Date.now() - Number(period) * 86_400_000).toISOString();
+    setLoadError(null);
+    // Pas de filtre par date : on veut TOUS les tickets ouverts,
+    // qu'ils aient 2 jours ou 60 jours. Un ticket ouvert de 45 jours
+    // ne disparaît pas parce que la période est réglée sur 30 j.
     let q = supabase
       .from('sav_ticket_enriched')
       .select('*')
       .eq('is_open', true)
-      .gte('created_at', since)
-      .limit(2000);
+      .eq('is_customer_request', true)
+      .order('created_at', { ascending: false })
+      .limit(1500);
     if (selectedChannel !== 'all') q = q.eq('channel_key', selectedChannel);
 
     q.then(({ data, error }) => {
-      if (!error && data) setRows(data);
+      if (error) setLoadError(error.message);
+      else if (data) setRows(data);
       setLoading(false);
     });
-  }, [selectedChannel, period]);
+  }
+
+  useEffect(load, [selectedChannel]);
 
   const triaged = useMemo(() => rows.map((r) => triage(r)).sort(bySlaUrgency), [rows]);
 
@@ -260,7 +268,12 @@ export default function Queue({ selectedChannel, period }) {
         ))}
       </div>
 
-      {loading ? <Loading /> : filtered.length === 0 ? (
+      {loading ? <Loading /> : loadError ? (
+        <div className="border border-urgent/30 bg-urgent/5 px-4 py-3 text-xs text-urgent flex items-center justify-between gap-4">
+          <span>Erreur de chargement : {loadError}</span>
+          <button onClick={load} className="text-[11px] uppercase tracking-wider border border-urgent/40 px-2 py-0.5 hover:bg-urgent/10">Réessayer</button>
+        </div>
+      ) : filtered.length === 0 ? (
         <Empty message={bucket === 'a_traiter' ? 'Rien à traiter — file vide.' : 'Aucun ticket dans cet état.'} />
       ) : (
         <div className="border-t border-ink/8">

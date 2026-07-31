@@ -481,9 +481,26 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
     const so = salesOrderId != null ? salesOrdersById.get(String(salesOrderId)) : null;
     const channelId = pick(raw, 'channel_id');
 
+    // Pré-classification depuis la réponse liste (subject + tags, sans appel API).
+    // Si le ticket n'a pas de commande associée ET que le sujet ne contient aucun
+    // mot-clé SAV → c'est vraisemblablement une notification automatique (confirmation
+    // d'expédition, mail transactionnel…). On stocke le ticket minimal mais on évite
+    // les 2-3 appels /tickets/{id} + /messages/{id} inutiles.
+    const hasSalesOrder = pick(raw, 'sales_order_id') != null;
+    const quickSubject = String(pick(raw, 'subject', 'title') || '').toLowerCase();
+    const hasSavKeywords = [
+      'retour', 'rembours', 'annul', 'défaut', 'cassé', 'manqu', 'livraison',
+      'colis', 'retard', 'facture', 'sav', 'réclamation', 'problème', 'endommagé',
+      'erreur', 'question', 'renseignement', 'suivi', 'tracking', 'pièce',
+    ].some((kw) => quickSubject.includes(kw));
+    const skipDetail = !hasSalesOrder && !hasSavKeywords;
+
     let messageCount = 0;
     let firstMessage = firstMessageCache.get(String(id)) || null;
     let lastMessage = null;
+    if (skipDetail) {
+      // Notification probable : on stocke juste les métadonnées, sans les messages.
+    } else
     try {
       const detail = await edeskGetSmart(`/tickets/${id}`);
       const body = extractTicketDetailBody(detail);
@@ -529,7 +546,7 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
     } catch (e) {
       console.warn(`  détail ticket ${id}:`, e.message);
     }
-    await sleep(API_SLEEP_MS); // espace les appels /tickets/{id} et /messages/{id} pour rester sous le quota
+    if (!skipDetail) await sleep(API_SLEEP_MS); // espace les appels /tickets/{id} et /messages/{id}
 
     const lastMessageAt = pick(raw, 'last_updated_at', 'updated_at');
 
