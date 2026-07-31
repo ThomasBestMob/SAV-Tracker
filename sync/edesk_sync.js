@@ -57,6 +57,17 @@ function daysAgoIso(days) {
   return new Date(Date.now() - days * 86_400_000).toISOString();
 }
 
+// eDesk renvoie parfois des dates en timestamp Unix (secondes) au lieu d'ISO string.
+// Postgres rejette les entiers sur les colonnes timestamptz — on normalise ici.
+function toIso(v) {
+  if (v == null) return null;
+  const n = Number(v);
+  if (!isNaN(n) && String(v).trim().match(/^\d{9,11}$/)) {
+    return new Date(n * 1000).toISOString();
+  }
+  return String(v);
+}
+
 // Plus récent entre le curseur incrémental et la fenêtre glissante — ne jamais remonter
 // plus loin que la fenêtre, même sur le tout premier run (FULL_SYNC ou pas de curseur).
 function effectiveSince(cursor, lookbackDays) {
@@ -264,9 +275,9 @@ function extractTracking(o) {
     tracking_code: clean(pick(first || {}, 'tracking_code', 'code')),
     carrier: clean(pick(first || {}, 'tracking_carrier_name', 'carrier_name', 'carrier')),
     tracking_url: pick(first || {}, 'tracking_link', 'tracking_url'),
-    shipped_at: pick(o, 'order_shipped_at', 'shipped_at'),
-    expected_delivery_from: pick(dates, 'expected_delivery_from'),
-    expected_delivery_to: pick(dates, 'expected_delivery_to'),
+    shipped_at: toIso(pick(o, 'order_shipped_at', 'shipped_at')),
+    expected_delivery_from: toIso(pick(dates, 'expected_delivery_from')),
+    expected_delivery_to: toIso(pick(dates, 'expected_delivery_to')),
   };
 }
 
@@ -277,7 +288,7 @@ function extractSalesOrder(o) {
     id: pick(o, 'id'),
     channel_id: pick(o, 'channel_id'),
     order_reference: pick(o, 'seller_order_id', 'order_reference', 'reference'),
-    order_date: pick(o, 'order_date', 'created_at'),
+    order_date: toIso(pick(o, 'order_date', 'created_at')),
     total_value: Number(pick(o, 'total_amount', 'total', 'total_value', 'grand_total')) || null,
     currency: pick(o, 'currency') || pick(firstProduct, 'currency'),
     order_refs: extractOrderRefs(o),
@@ -594,16 +605,14 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
       // identifier le nom du champ portant le corps du message (c'est `body`,
       // confirmé en prod). La colonne existe toujours et garde ses valeurs —
       // une colonne omise n'est pas touchée par l'upsert.
-      first_message_at: firstMessage?.created_at ?? null,
+      first_message_at: toIso(firstMessage?.created_at) ?? null,
       first_message_direction: firstMessage?.direction ?? null,
       last_message_direction: lastMessage?.direction ?? null,
-      // Défauts produit détectés dans la demande initiale — axe distinct de
-      // `category` (qui décrit la démarche), destiné à l'équipe offre.
       product_issues: detectProductIssues(ticketForClassification.subject, firstMessage?.body),
       ...extractTracking(so?.raw || {}),
-      created_at: pick(raw, 'created_at'),
-      updated_at: pick(raw, 'last_updated_at', 'updated_at'),
-      last_message_at: lastMessageAt,
+      created_at: toIso(pick(raw, 'created_at')),
+      updated_at: toIso(pick(raw, 'last_updated_at', 'updated_at')),
+      last_message_at: toIso(lastMessageAt),
       raw,
       synced_at: new Date().toISOString(),
     };
