@@ -44,6 +44,9 @@ const TICKET_SYNC_LIMIT = process.env.TICKET_SYNC_LIMIT ? parseInt(process.env.T
 //     lieu de re-télécharger 45 min de tickets pour une règle changée ;
 //   - continuer à travailler quand l'accès eDesk est indisponible.
 const RECLASSIFY_ONLY = String(process.env.RECLASSIFY_ONLY || 'false').toLowerCase() === 'true';
+// Délai entre chaque appel API eDesk (ms). Augmenter si le sync déclenche
+// des 429 "Out of quota" — chaque ticket fait 2-3 appels /messages/{id}.
+const API_SLEEP_MS = parseInt(process.env.API_SLEEP_MS || '400', 10);
 
 // La reclassification ne parle qu'à Supabase : ne pas exiger de jeton eDesk,
 // c'est précisément le mode qui doit rester utilisable quand l'accès est perdu.
@@ -109,7 +112,7 @@ async function edeskGetSmart(path, params) {
     if (r.status === 429 && attempt < MAX_429_RETRIES) {
       attempt += 1;
       const retryAfterHeader = parseInt(r.headers.get('retry-after') || '', 10);
-      const waitMs = Number.isFinite(retryAfterHeader) ? retryAfterHeader * 1000 : Math.min(30000, 1000 * 2 ** attempt);
+      const waitMs = Number.isFinite(retryAfterHeader) ? retryAfterHeader * 1000 : Math.min(60000, 10000 * 2 ** (attempt - 1));
       console.warn(`  429 sur ${path} — attente ${Math.round(waitMs / 1000)}s puis retry (${attempt}/${MAX_429_RETRIES})`);
       await sleep(waitMs);
       continue;
@@ -490,7 +493,7 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
       if (messageCount === 1) {
         // Un seul message : les deux extrémités sont le même objet.
         if (!firstMessage) {
-          await sleep(150);
+          await sleep(API_SLEEP_MS);
           firstMessage = extractMessageBody(await edeskGetSmart(`/messages/${messagesIds[0]}`), messagesIds[0]);
         }
         lastMessage = firstMessage;
@@ -503,9 +506,9 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
           // extrémités et on tranche sur created_at : l'ordre du tableau n'est
           // pas documenté et le supposer ferait passer le dernier message pour
           // la demande initiale.
-          await sleep(150);
+          await sleep(API_SLEEP_MS);
           const head = extractMessageBody(await edeskGetSmart(`/messages/${headId}`), headId);
-          await sleep(150);
+          await sleep(API_SLEEP_MS);
           const tail = extractMessageBody(await edeskGetSmart(`/messages/${tailId}`), tailId);
           const headFirst = String(head.created_at || '') <= String(tail.created_at || '');
           if (_threadOrder == null) {
@@ -519,14 +522,14 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
           // pour le dernier message (qui change à chaque échange, donc jamais
           // mis en cache).
           const lastId = _threadOrder === 'asc' ? tailId : headId;
-          await sleep(150);
+          await sleep(API_SLEEP_MS);
           lastMessage = extractMessageBody(await edeskGetSmart(`/messages/${lastId}`), lastId);
         }
       }
     } catch (e) {
       console.warn(`  détail ticket ${id}:`, e.message);
     }
-    await sleep(200); // espace les appels /tickets/{id} et /messages/{id} pour rester sous le quota
+    await sleep(API_SLEEP_MS); // espace les appels /tickets/{id} et /messages/{id} pour rester sous le quota
 
     const lastMessageAt = pick(raw, 'last_updated_at', 'updated_at');
 
