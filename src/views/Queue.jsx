@@ -176,7 +176,7 @@ export default function Queue({ selectedChannel }) {
     // qu'ils aient 2 jours ou 60 jours. Un ticket ouvert de 45 jours
     // ne disparaît pas parce que la période est réglée sur 30 j.
     let q = supabase
-      .from('sav_ticket_enriched')
+      .from('sav_ticket_light')
       .select('*')
       .eq('is_open', true)
       .eq('is_customer_request', true)
