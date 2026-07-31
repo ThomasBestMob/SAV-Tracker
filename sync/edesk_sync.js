@@ -393,13 +393,13 @@ async function syncReferenceData() {
   const users = await fetchResource('users', 'users');
   const tagGroups = await fetchResource('tag-groups', 'tag-groups');
   const templates = await fetchResource('templates', 'templates');
-  const contacts = await fetchResource('contacts', 'contacts');
+  // Contacts non synchronisés : 9985 contacts = ~100 pages API pour rien
+  // (sav_contacts n'est pas utilisé dans les vues du dashboard).
   await sbUpsert('sav_channels', channels.map(extractChannel), 'id');
   await sbUpsert('sav_users', users.map(extractUser), 'id');
   await sbUpsert('sav_tag_groups', tagGroups.map(extractTagGroup), 'id');
   await sbUpsert('sav_templates', templates.map(extractTemplate), 'id');
-  await sbUpsert('sav_contacts', contacts.map(extractContact), 'id');
-  console.log(`  ${channels.length} canaux, ${users.length} users, ${tagGroups.length} groupes de tags, ${templates.length} templates, ${contacts.length} contacts.`);
+  console.log(`  ${channels.length} canaux, ${users.length} users, ${tagGroups.length} groupes de tags, ${templates.length} templates.`);
 
   // Zéro canal ET zéro utilisateur n'arrive pas sur un compte eDesk en service :
   // c'est le signe que les appels échouent (quota, permissions révoquées) et que
@@ -505,6 +505,8 @@ async function syncTicketsAndMessages(channelsById, salesOrdersById) {
       'erreur', 'question', 'renseignement', 'suivi', 'tracking', 'pièce',
     ].some((kw) => quickSubject.includes(kw));
     const skipDetail = !hasSalesOrder && !hasSavKeywords;
+    // Notification transactionnelle : pas une demande client, inutile de stocker.
+    if (skipDetail) continue;
 
     let messageCount = 0;
     let firstMessage = firstMessageCache.get(String(id)) || null;
