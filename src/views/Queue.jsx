@@ -77,20 +77,21 @@ function PhotosButton({ html }) {
 
 async function downloadInvoice(psOrderId, ref) {
   try {
-    // Si ps_order_id absent (vue légère), on cherche l'ID PS depuis la ref commande
+    // Lookup PS order_id depuis la référence commande eDesk.
+    // Deux chemins : commande site (order_reference) et marketplace (lengow_marketplace_order_id).
     let orderId = psOrderId;
     if (!orderId && ref) {
       const { supabase: sb } = await import('../supabaseClient');
       const { data } = await sb
         .from('ps_sales_daily')
         .select('order_id')
-        .eq('order_reference', ref)
+        .or(`order_reference.eq.${ref},lengow_marketplace_order_id.eq.${ref}`)
         .limit(1)
         .maybeSingle();
       orderId = data?.order_id;
     }
     if (!orderId) {
-      alert(`Commande PrestaShop introuvable pour la référence "${ref}" — cette commande vient peut-être d'une marketplace (Amazon, Cdiscount…) et n'a pas d'ID PS direct.`);
+      alert(`Commande PrestaShop introuvable pour la référence "${ref}".`);
       return;
     }
     const r = await fetch(`/api/invoice?order_id=${encodeURIComponent(orderId)}`);

@@ -278,6 +278,12 @@ export default function Products() {
                       <div className="text-sm font-medium">{t.subject || '(sans sujet)'}</div>
                       <span className="text-[10px] uppercase tracking-wider text-muted whitespace-nowrap">{channelLabel(t.channel_key)}</span>
                     </div>
+                    {/* Commande multi-produits : même ticket dans plusieurs panneaux produit */}
+                    {t.order_refs?.length > 1 && (
+                      <div className="text-[10px] text-amber-700 mt-0.5 italic">
+                        Commande multi-produits ({t.order_refs.length} réf.) — la plainte peut concerner un autre article de cette commande.
+                      </div>
+                    )}
                     <div className="text-[11px] text-muted mt-0.5">
                       {categoryLabel(t.category)} · {t.created_at ? new Date(t.created_at).toLocaleDateString('fr-FR') : '—'}
                       {t.edesk_order_reference ? ` · ${t.edesk_order_reference}` : ''}
