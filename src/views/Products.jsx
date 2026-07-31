@@ -3,6 +3,7 @@ import { supabase } from '../supabaseClient';
 import { Loading, Empty, categoryLabel } from '../components/Atoms';
 import { channelLabel } from '../lib/triage';
 import { productIssueLabel, productIssueHint } from '../lib/productIssues';
+import { stripHtml } from '../lib/stripHtml';
 
 // Sans plancher de ventes, le classement par taux remonte des références à
 // 1 vente / 1 ticket affichées à 100 %, qui masquent les vraies anomalies.
@@ -247,7 +248,7 @@ export default function Products() {
                     </div>
                     {t.first_message_body ? (
                       <blockquote className="mt-2 text-xs text-ink/80 italic border-l-2 border-accent/30 pl-3 whitespace-pre-wrap max-h-40 overflow-y-auto">
-                        {t.first_message_body}
+                        {stripHtml(t.first_message_body)}
                       </blockquote>
                     ) : (
                       <div className="mt-2 text-[11px] italic text-muted">Message non synchronisé.</div>

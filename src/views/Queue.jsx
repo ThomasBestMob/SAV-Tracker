@@ -3,6 +3,7 @@ import { supabase } from '../supabaseClient';
 import { Loading, Empty, categoryLabel } from '../components/Atoms';
 import { triage, bySlaUrgency, ACTIONS, BUCKETS, channelLabel, draftReply, trackingUrl } from '../lib/triage';
 import { productIssueLabel } from '../lib/productIssues';
+import { stripHtml } from '../lib/stripHtml';
 
 const SLA_STYLES = {
   breached: 'bg-urgent/10 text-urgent border-urgent/40',
@@ -123,7 +124,7 @@ function Row({ t }) {
               Demande du client {t.first_message_author ? `— ${t.first_message_author}` : ''}
             </div>
             <div className="text-xs whitespace-pre-wrap bg-ink/[0.03] border border-ink/10 p-2.5 max-h-64 overflow-y-auto">
-              {t.first_message_body || (
+              {t.first_message_body ? stripHtml(t.first_message_body) : (
                 <span className="italic text-muted">
                   Message non synchronisé — ce ticket date d'avant la récupération des messages. Un sync complet le remplira.
                 </span>
