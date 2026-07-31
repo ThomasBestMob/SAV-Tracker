@@ -222,9 +222,38 @@ function formatDate(d) {
  * Réponse pré-rédigée pour les cas outillés. L'agent la relit et l'envoie —
  * jamais d'envoi sans relecture (cf. README, section Automatisations).
  */
+// Détecte si le message est un relais marketplace (Cdiscount, Amazon…)
+// en cherchant leur signature dans le corps ou le sujet du ticket.
+function detectMarketplaceRelay(ticket) {
+  const hay = `${ticket.subject || ''} ${ticket.first_message_body || ''}`.toLowerCase();
+  if (hay.includes('cdiscount') || hay.includes('service client cdiscount')) return 'Cdiscount';
+  if (hay.includes('amazon') || hay.includes('marketplace amazon')) return 'Amazon';
+  if (hay.includes('manomano') || hay.includes('mano mano')) return 'ManoMano';
+  if (hay.includes('maisons du monde') || hay.includes('maisonsdumonde')) return 'Maisons du Monde';
+  if (hay.includes('la redoute')) return 'La Redoute';
+  if (hay.includes('conforama')) return 'Conforama';
+  if (hay.includes('but.fr') || /\bbut\b/.test(hay)) return 'BUT';
+  return null;
+}
+
 export function draftReply(ticket) {
   const action = suggestAction(ticket);
   const ref = ticket.edesk_order_reference || ticket.ps_order_reference || '';
+  const marketplace = detectMarketplaceRelay(ticket);
+
+  if (marketplace && !ticket.channel_key?.includes(marketplace.toLowerCase().replace(/ /g, ''))) {
+    return [
+      'Bonjour,',
+      '',
+      `Nous avons bien reçu votre demande transmise via ${marketplace}.`,
+      ref ? `Nous la rattachons à votre commande ${ref}.` : '',
+      '',
+      'Nous revenons vers vous dans les meilleurs délais.',
+      '',
+      'Bien cordialement,',
+      'Le service client BestMobilier',
+    ].filter(s => s !== undefined).join('\n');
+  }
 
   if (action === 'repondre_suivi') {
     const from = formatDate(ticket.expected_delivery_from);

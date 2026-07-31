@@ -81,8 +81,10 @@ function Row({ t }) {
 
         <div className="flex-1 min-w-0">
           <div className="text-sm truncate">{t.subject || '(sans sujet)'}</div>
-          <div className="text-[11px] text-muted flex flex-wrap gap-x-2.5 mt-0.5">
-            <span>{channelLabel(t.channel_key)}</span>
+          <div className="text-[11px] text-muted flex flex-wrap gap-x-2.5 mt-0.5 items-center">
+            {t.channel_key && (
+              <span className={`${chip} border-ink/20 text-muted`}>{channelLabel(t.channel_key)}</span>
+            )}
             <span>{categoryLabel(t.category)}</span>
             {t.product_issues?.length > 0 && (
               <span className="text-accent">{t.product_issues.map(productIssueLabel).join(', ')}</span>
@@ -94,10 +96,10 @@ function Row({ t }) {
         </div>
 
         <div className="flex items-center gap-1.5 shrink-0">
-          {t.action === 'envoyer_facture' && (
+          {t.edesk_order_reference && (
             <button
               onClick={(e) => { e.stopPropagation(); downloadInvoice(t.ps_order_id, t.edesk_order_reference); }}
-              className={`${chip} border-accent text-accent hover:bg-accent hover:text-white transition-colors`}
+              className={`${chip} border-ink/20 text-muted hover:border-accent hover:text-accent transition-colors`}
             >
               Facture
             </button>

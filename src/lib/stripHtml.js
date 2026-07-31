@@ -12,6 +12,7 @@ export function stripHtml(html) {
     .replace(/&quot;/g, '"')
     .replace(/&#x27;|&apos;|&#39;/g, "'")
     .replace(/&nbsp;/g, ' ')
+    .replace(/&#x([0-9a-fA-F]+);/g, (_, h) => String.fromCharCode(parseInt(h, 16)))
     .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(Number(n)))
     // Balises bloc → saut de ligne
     .replace(/<br\s*\/?>/gi, '\n')
